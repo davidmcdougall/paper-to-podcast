@@ -1,0 +1,25 @@
+# Secrets
+.env
+
+# Generated audio, PDFs, and episode data
+static/audio/
+static/pdfs/
+static/episodes.json
+static/feed.xml
+
+# Podcast artwork (bring your own)
+Paper to Podcast logo.png
+static/logo.png
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# macOS
+.DS_Store

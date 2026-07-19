@@ -1,0 +1,826 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Episode Library · Paper to Podcast</title>
+  <link rel="icon" type="image/png" href="/static/favicon.png">
+  <link rel="shortcut icon" href="/static/favicon.ico">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #0f0f12;
+      color: #e8e8f0;
+      min-height: 100vh;
+    }
+
+    /* ── STICKY HEADER ─────────────────────────────────────── */
+    .sticky-header {
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      background: rgba(15, 15, 18, 0.92);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border-bottom: 1px solid #1e1e2a;
+      padding: 14px 20px;
+    }
+
+    .header-inner {
+      max-width: 1140px;
+      margin: 0 auto;
+    }
+
+    .header-row1 {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 12px;
+      flex-wrap: wrap;
+    }
+
+    h1 {
+      font-size: 1.4rem;
+      font-weight: 700;
+      letter-spacing: -0.03em;
+      background: linear-gradient(135deg, #a78bfa, #60a5fa);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .back-link {
+      color: #6b6b8a;
+      font-size: 0.85rem;
+      text-decoration: none;
+    }
+    .back-link:hover { color: #a78bfa; }
+
+    /* ── CONTROLS ──────────────────────────────────────────── */
+    .controls {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    .search-wrap {
+      position: relative;
+      flex: 1;
+      min-width: 160px;
+    }
+
+    .search-wrap svg {
+      position: absolute;
+      left: 10px;
+      top: 50%;
+      transform: translateY(-50%);
+      pointer-events: none;
+      color: #4c4c6e;
+    }
+
+    #search {
+      width: 100%;
+      background: #17171f;
+      border: 1px solid #2a2a38;
+      border-radius: 8px;
+      color: #e8e8f0;
+      font-size: 0.85rem;
+      padding: 7px 10px 7px 34px;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+    #search::placeholder { color: #4c4c6e; }
+    #search:focus { border-color: #7c3aed; }
+
+    .clear-search {
+      position: absolute;
+      right: 8px;
+      top: 50%;
+      transform: translateY(-50%);
+      background: none;
+      border: none;
+      color: #4c4c6e;
+      cursor: pointer;
+      font-size: 1rem;
+      line-height: 1;
+      padding: 2px 4px;
+      display: none;
+    }
+    .clear-search:hover { color: #a78bfa; }
+
+    .sort-group {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+      flex-shrink: 0;
+    }
+
+    .sort-label {
+      font-size: 0.75rem;
+      color: #4c4c6e;
+      white-space: nowrap;
+    }
+
+    #sort-field, #sort-dir {
+      background: #17171f;
+      border: 1px solid #2a2a38;
+      border-radius: 8px;
+      color: #a0a0c0;
+      font-size: 0.8rem;
+      padding: 6px 8px;
+      outline: none;
+      cursor: pointer;
+      transition: border-color 0.15s;
+    }
+    #sort-field:focus, #sort-dir:focus { border-color: #7c3aed; }
+
+    .count-bar {
+      font-size: 0.78rem;
+      color: #4c4c6e;
+      margin-top: 8px;
+    }
+
+    /* ── GRID ──────────────────────────────────────────────── */
+    .episodes {
+      max-width: 1140px;
+      margin: 24px auto 0;
+      padding: 0 20px;
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+      gap: 16px;
+      align-items: start;
+    }
+
+    /* ── EPISODE CARD ──────────────────────────────────────── */
+    .episode-card {
+      background: #17171f;
+      border: 1px solid #2a2a38;
+      border-radius: 14px;
+      padding: 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      transition: border-color 0.15s;
+    }
+    .episode-card:hover { border-color: #3a3a52; }
+    .episode-card.hidden { display: none; }
+
+    /* authors */
+    .ep-authors {
+      font-size: 0.72rem;
+      color: #6060a0;
+      font-style: italic;
+      line-height: 1.4;
+      min-height: 1em;
+    }
+
+    /* title row */
+    .episode-title {
+      font-size: 0.92rem;
+      font-weight: 600;
+      color: #c8c8e8;
+      line-height: 1.4;
+      display: flex;
+      align-items: flex-start;
+      gap: 6px;
+    }
+
+    .title-text { flex: 1; }
+
+    .rename-btn {
+      background: none; border: none; color: #3a3a52; font-size: 0.85rem;
+      cursor: pointer; padding: 2px 3px; border-radius: 4px; opacity: 0;
+      transition: opacity 0.2s; flex-shrink: 0; margin-top: 1px;
+    }
+    .episode-title:hover .rename-btn { opacity: 1; }
+    .rename-btn:hover { color: #a78bfa; }
+    .rename-input {
+      background: #0f0f16; border: 1px solid #7c3aed; border-radius: 6px;
+      color: #c8c8e8; font-size: 0.92rem; font-weight: 600; padding: 2px 7px;
+      flex: 1; outline: none;
+    }
+
+    /* topics chips */
+    .ep-topics {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 5px;
+      min-height: 22px;
+    }
+
+    .topic-chip {
+      font-size: 0.7rem;
+      color: #a78bfa;
+      background: #1e1828;
+      border: 1px solid #3a2a52;
+      border-radius: 20px;
+      padding: 2px 9px;
+      white-space: nowrap;
+    }
+
+    /* show notes blurb */
+    .ep-blurb {
+      font-size: 0.78rem;
+      color: #7070a0;
+      line-height: 1.6;
+    }
+
+    /* meta row */
+    .episode-meta {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .episode-date {
+      font-size: 0.72rem;
+      color: #4c4c6e;
+    }
+
+    .episode-source {
+      font-size: 0.72rem;
+      color: #4c4c6e;
+      padding: 1px 7px;
+      background: #1e1e2a;
+      border-radius: 20px;
+      max-width: 160px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    /* audio */
+    audio {
+      width: 100%;
+      accent-color: #7c3aed;
+    }
+
+    /* buttons row */
+    .btn-row {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    .toggle-btn {
+      background: none;
+      border: 1px solid #2a2a38;
+      color: #6b6b8a;
+      font-size: 0.73rem;
+      padding: 4px 10px;
+      border-radius: 7px;
+      cursor: pointer;
+      transition: color 0.2s, border-color 0.2s;
+      white-space: nowrap;
+    }
+    .toggle-btn:hover { color: #a78bfa; border-color: #7c3aed; }
+
+    .pdf-link {
+      font-size: 0.73rem;
+      color: #6b6b8a;
+      border: 1px solid #2a2a38;
+      border-radius: 7px;
+      padding: 4px 10px;
+      text-decoration: none;
+      transition: color 0.2s, border-color 0.2s;
+      white-space: nowrap;
+    }
+    .pdf-link:hover { color: #60a5fa; border-color: #2a5a8a; }
+
+    .meta-edit-btn {
+      background: none;
+      border: none;
+      color: #3a3a52;
+      font-size: 0.73rem;
+      padding: 4px 6px;
+      cursor: pointer;
+      border-radius: 7px;
+      margin-left: auto;
+      transition: color 0.2s;
+    }
+    .meta-edit-btn:hover { color: #a78bfa; }
+
+    /* inline meta editor */
+    .meta-editor {
+      display: none;
+      flex-direction: column;
+      gap: 8px;
+      background: #0f0f16;
+      border: 1px solid #2a2a38;
+      border-radius: 10px;
+      padding: 12px;
+    }
+    .meta-editor.open { display: flex; }
+
+    .meta-editor label {
+      font-size: 0.72rem;
+      color: #6b6b8a;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .meta-editor input {
+      background: #17171f;
+      border: 1px solid #2a2a38;
+      border-radius: 6px;
+      color: #c8c8e8;
+      font-size: 0.8rem;
+      padding: 5px 8px;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+    .meta-editor input:focus { border-color: #7c3aed; }
+
+    .meta-editor-actions {
+      display: flex;
+      gap: 8px;
+      justify-content: flex-end;
+    }
+
+    .meta-save-btn {
+      background: #7c3aed;
+      border: none;
+      border-radius: 6px;
+      color: #fff;
+      font-size: 0.75rem;
+      padding: 4px 12px;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    .meta-save-btn:hover { background: #6d28d9; }
+
+    .meta-cancel-btn {
+      background: none;
+      border: 1px solid #2a2a38;
+      border-radius: 6px;
+      color: #6b6b8a;
+      font-size: 0.75rem;
+      padding: 4px 12px;
+      cursor: pointer;
+    }
+    .meta-cancel-btn:hover { color: #a78bfa; border-color: #7c3aed; }
+
+    /* expandable bodies */
+    .summary-body {
+      display: none;
+      background: #0f0f16;
+      border: 1px solid #2a2a38;
+      border-radius: 10px;
+      padding: 14px;
+      font-size: 0.8rem;
+      line-height: 1.7;
+      color: #8080a8;
+      max-height: 240px;
+      overflow-y: auto;
+    }
+
+    .summary-body h2, .summary-body h3 {
+      color: #b0b0d0;
+      font-size: 0.82rem;
+      margin: 10px 0 4px;
+    }
+
+    /* no-results / empty */
+    #no-results {
+      display: none;
+      grid-column: 1 / -1;
+      text-align: center;
+      color: #4c4c6e;
+      padding: 60px 20px;
+      font-size: 0.9rem;
+    }
+
+    .empty {
+      max-width: 760px;
+      margin: 80px auto;
+      text-align: center;
+      color: #4c4c6e;
+    }
+    .empty a { color: #a78bfa; text-decoration: none; }
+
+    footer {
+      max-width: 1140px;
+      margin: 48px auto 0;
+      padding: 0 20px 48px;
+      color: #2a2a38;
+      font-size: 0.75rem;
+      text-align: center;
+    }
+
+    /* ── SCROLL-TO-TOP ─────────────────────────────────────── */
+    #scroll-top {
+      position: fixed;
+      bottom: 28px;
+      right: 28px;
+      width: 38px;
+      height: 38px;
+      background: #17171f;
+      border: 1px solid #2a2a38;
+      border-radius: 50%;
+      color: #6b6b8a;
+      font-size: 1.1rem;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.2s, color 0.2s, border-color 0.2s;
+      z-index: 200;
+    }
+    #scroll-top.visible { opacity: 1; pointer-events: auto; }
+    #scroll-top:hover { color: #a78bfa; border-color: #7c3aed; }
+
+    /* ── RESPONSIVE ────────────────────────────────────────── */
+    @media (max-width: 640px) {
+      .episodes { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- STICKY HEADER -->
+  <div class="sticky-header">
+    <div class="header-inner">
+      <div class="header-row1">
+        <h1 style="display:flex; align-items:center; gap:10px;">
+          <img src="/static/logo.png" alt="" style="width:32px; height:32px; border-radius:7px; flex-shrink:0;">
+          Episode Library
+        </h1>
+        <a class="back-link" href="/">← New episode</a>
+      </div>
+      <div class="controls">
+        <div class="search-wrap">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+          </svg>
+          <input id="search" type="text" placeholder="Search title, author, topic…" autocomplete="off" />
+          <button class="clear-search" id="clear-search" title="Clear">✕</button>
+        </div>
+        <div class="sort-group">
+          <span class="sort-label">Sort</span>
+          <select id="sort-field">
+            <option value="date">Date</option>
+            <option value="title">Title</option>
+            <option value="words">Words</option>
+          </select>
+          <select id="sort-dir">
+            <option value="desc">↓</option>
+            <option value="asc">↑</option>
+          </select>
+        </div>
+      </div>
+      <div class="count-bar" id="count-bar"></div>
+    </div>
+  </div>
+
+  {% if episodes %}
+  <div class="episodes" id="episode-list">
+    {% for ep in episodes %}
+    <div class="episode-card"
+         data-title="{{ ep.title | lower }}"
+         data-source="{{ ep.pdf_name | lower }}"
+         data-authors="{{ (ep.authors or []) | join(', ') | lower }}"
+         data-topics="{{ (ep.topics or []) | join(', ') | lower }}"
+         data-date="{{ ep.date[:10] }}"
+         data-words="{{ ep.word_count or 0 }}"
+         data-sort-title="{{ ep.title | lower }}">
+
+      <!-- Authors -->
+      <div class="ep-authors ep-authors-display">
+        {% if ep.authors %}{{ ep.authors | join(', ') }}{% endif %}
+      </div>
+
+      <!-- Title -->
+      <div class="episode-title" data-slug="{{ ep.slug }}">
+        <span class="title-text">{{ ep.title }}</span>
+        <button class="rename-btn" onclick="startRename(this)" title="Rename">✎</button>
+      </div>
+
+      <!-- Topics -->
+      <div class="ep-topics ep-topics-display">
+        {% for t in (ep.topics or []) %}
+        <span class="topic-chip">{{ t }}</span>
+        {% endfor %}
+      </div>
+
+      <!-- Show notes blurb -->
+      {% set blurb = ep.show_notes or '' %}
+      {% if blurb %}
+      <p class="ep-blurb">{{ blurb }}</p>
+      {% elif ep.summary %}
+      <p class="ep-blurb">{{ ep.summary | replace('## Claim', '') | replace('## Argument', '') | replace('## Mechanism', '') | replace('## Context', '') | replace('## Limits', '') | replace('## Open questions', '') | replace('## Connections', '') | replace('#', '') | truncate(220, True, '…') | trim }}</p>
+      {% endif %}
+
+      <!-- Meta -->
+      <div class="episode-meta">
+        <span class="episode-date">{{ ep.date[:10] }}</span>
+        <span class="episode-source" title="{{ ep.pdf_name }}">{{ ep.pdf_name }}</span>
+        {% if ep.word_count %}<span class="episode-source">{{ ep.word_count }}w</span>{% endif %}
+        {% if ep.duration %}<span class="episode-source">{{ ep.duration // 60 }}:{{ '%02d' % (ep.duration % 60) }}</span>{% endif %}
+      </div>
+
+      <!-- Audio -->
+      <audio controls src="{{ ep.audio_url }}"></audio>
+
+      <!-- Button row -->
+      <div class="btn-row">
+        {% if ep.script %}
+        <button class="toggle-btn" onclick="toggleBlock(this, 'script')">Script</button>
+        {% endif %}
+        {% if ep.summary %}
+        <button class="toggle-btn" onclick="toggleBlock(this, 'summary')">Summary</button>
+        {% endif %}
+        {% if ep.pdf_url %}
+        <a class="pdf-link" href="{{ ep.pdf_url }}" target="_blank">PDF ↗</a>
+        {% endif %}
+        <button class="toggle-btn" onclick="regenAudio('{{ ep.slug }}', this)"
+          title="Re-voice from stored script (no Claude call)">Regen audio</button>
+        <button class="toggle-btn" style="color:#6b3030; border-color:#3a2020;"
+          onclick="deleteEpisode('{{ ep.slug }}', this)">Delete</button>
+        <button class="meta-edit-btn" title="Edit authors &amp; topics"
+          onclick="toggleMetaEditor(this)">✎ meta</button>
+      </div>
+
+      <!-- Inline meta editor -->
+      <div class="meta-editor">
+        <label>Authors (comma-separated)
+          <input type="text" class="meta-authors-input"
+            value="{{ (ep.authors or []) | join(', ') }}"
+            placeholder="e.g. Hannah Arendt, Manuel Castells" />
+        </label>
+        <label>Topics (comma-separated)
+          <input type="text" class="meta-topics-input"
+            value="{{ (ep.topics or []) | join(', ') }}"
+            placeholder="e.g. political theory, urban renewal" />
+        </label>
+        <div class="meta-editor-actions">
+          <button class="meta-cancel-btn" onclick="cancelMetaEditor(this)">Cancel</button>
+          <button class="meta-save-btn"
+            onclick="saveMetaEditor(this, '{{ ep.slug }}')">Save</button>
+        </div>
+      </div>
+
+      <!-- Expandable bodies -->
+      {% if ep.script %}
+      <div class="summary-body script-body" style="font-family: Georgia, serif;">{{ ep.script }}</div>
+      {% endif %}
+      {% if ep.summary %}
+      <div class="summary-body">{{ ep.summary | safe }}</div>
+      {% endif %}
+    </div>
+    {% endfor %}
+    <div id="no-results">No episodes match "<span id="no-results-query"></span>"</div>
+  </div>
+  {% else %}
+  <div class="empty">
+    <p>No episodes yet.</p>
+    <p style="margin-top:8px"><a href="/">Generate your first one →</a></p>
+  </div>
+  {% endif %}
+
+  <footer>Paper to Podcast · <a href="/" style="color:#3a3a52">Generate new episode</a></footer>
+
+  <button id="scroll-top" title="Back to top">↑</button>
+
+  <script>
+    // ── DATA ────────────────────────────────────────────────
+    const cards = [...document.querySelectorAll('.episode-card[data-title]')];
+    const totalCount = cards.length;
+
+    // ── SORT PERSISTENCE ────────────────────────────────────
+    const sortField = document.getElementById('sort-field');
+    const sortDir   = document.getElementById('sort-dir');
+
+    function loadSortPrefs() {
+      const f = localStorage.getItem('ep-sort-field');
+      const d = localStorage.getItem('ep-sort-dir');
+      if (f) sortField.value = f;
+      if (d) sortDir.value   = d;
+    }
+
+    function saveSortPrefs() {
+      localStorage.setItem('ep-sort-field', sortField.value);
+      localStorage.setItem('ep-sort-dir',   sortDir.value);
+    }
+
+    // ── SORT ────────────────────────────────────────────────
+    function sortCards() {
+      const field = sortField.value;
+      const asc   = sortDir.value === 'asc';
+      const list  = document.getElementById('episode-list');
+
+      const sorted = [...cards].sort((a, b) => {
+        let va, vb;
+        if (field === 'date')  { va = a.dataset.date;  vb = b.dataset.date; }
+        if (field === 'title') { va = a.dataset.sortTitle; vb = b.dataset.sortTitle; }
+        if (field === 'words') { va = parseInt(a.dataset.words) || 0; vb = parseInt(b.dataset.words) || 0; }
+        if (va < vb) return asc ? -1 : 1;
+        if (va > vb) return asc ?  1 : -1;
+        return 0;
+      });
+
+      sorted.forEach(c => list.insertBefore(c, document.getElementById('no-results')));
+      applyFilter();
+    }
+
+    // ── SEARCH ──────────────────────────────────────────────
+    const searchInput  = document.getElementById('search');
+    const clearBtn     = document.getElementById('clear-search');
+    const countBar     = document.getElementById('count-bar');
+    const noResults    = document.getElementById('no-results');
+    const noResultsQ   = document.getElementById('no-results-query');
+
+    function applyFilter() {
+      const q = searchInput.value.trim().toLowerCase();
+      clearBtn.style.display = q ? 'block' : 'none';
+
+      let visible = 0;
+      cards.forEach(card => {
+        const match = !q
+          || card.dataset.title.includes(q)
+          || card.dataset.source.includes(q)
+          || card.dataset.authors.includes(q)
+          || card.dataset.topics.includes(q);
+        card.classList.toggle('hidden', !match);
+        if (match) visible++;
+      });
+
+      if (q) {
+        countBar.textContent = `${visible} of ${totalCount} episode${totalCount !== 1 ? 's' : ''} match "${searchInput.value.trim()}"`;
+      } else {
+        countBar.textContent = `${totalCount} episode${totalCount !== 1 ? 's' : ''}`;
+      }
+
+      if (noResults) {
+        noResults.style.display = visible > 0 ? 'none' : 'block';
+        if (noResultsQ) noResultsQ.textContent = searchInput.value.trim();
+      }
+    }
+
+    searchInput.addEventListener('input', applyFilter);
+    clearBtn.addEventListener('click', () => {
+      searchInput.value = '';
+      applyFilter();
+      searchInput.focus();
+    });
+
+    sortField.addEventListener('change', () => { saveSortPrefs(); sortCards(); });
+    sortDir.addEventListener('change',   () => { saveSortPrefs(); sortCards(); });
+
+    // ── SCROLL TO TOP ────────────────────────────────────────
+    const scrollTopBtn = document.getElementById('scroll-top');
+    window.addEventListener('scroll', () => {
+      scrollTopBtn.classList.toggle('visible', window.scrollY > 300);
+    }, { passive: true });
+    scrollTopBtn.addEventListener('click', () => window.scrollTo({ top: 0, behavior: 'smooth' }));
+
+    // ── INIT ─────────────────────────────────────────────────
+    loadSortPrefs();
+    sortCards();
+
+    // ── TOGGLE SCRIPT / SUMMARY ──────────────────────────────
+    function toggleBlock(btn, type) {
+      const card = btn.closest('.episode-card');
+      let target = null;
+      if (type === 'script') target = card.querySelector('.script-body');
+      else target = [...card.querySelectorAll('.summary-body')].find(b => !b.classList.contains('script-body'));
+      if (!target) return;
+      const open = target.style.display === 'block';
+      target.style.display = open ? 'none' : 'block';
+      btn.textContent = open ? (type === 'script' ? 'Script' : 'Summary') : `Hide ${type}`;
+    }
+
+    // ── META EDITOR ──────────────────────────────────────────
+    function toggleMetaEditor(btn) {
+      const card   = btn.closest('.episode-card');
+      const editor = card.querySelector('.meta-editor');
+      editor.classList.toggle('open');
+      btn.style.color = editor.classList.contains('open') ? '#a78bfa' : '';
+    }
+
+    function cancelMetaEditor(btn) {
+      const card   = btn.closest('.episode-card');
+      const editor = card.querySelector('.meta-editor');
+      editor.classList.remove('open');
+      card.querySelector('.meta-edit-btn').style.color = '';
+    }
+
+    async function saveMetaEditor(btn, slug) {
+      const card    = btn.closest('.episode-card');
+      const authors = card.querySelector('.meta-authors-input').value.trim();
+      const topics  = card.querySelector('.meta-topics-input').value.trim();
+
+      const res = await fetch(`/update-meta/${slug}`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ authors, topics }),
+      });
+
+      if (!res.ok) { alert('Save failed.'); return; }
+      const data = await res.json();
+
+      // Update display
+      card.dataset.authors = authors.toLowerCase();
+      card.dataset.topics  = topics.toLowerCase();
+
+      const authorsEl = card.querySelector('.ep-authors-display');
+      authorsEl.textContent = data.authors.join(', ');
+
+      const topicsEl = card.querySelector('.ep-topics-display');
+      topicsEl.innerHTML = data.topics.map(t => `<span class="topic-chip">${t}</span>`).join('');
+
+      // Close editor
+      cancelMetaEditor(btn);
+    }
+
+    // ── RENAME ───────────────────────────────────────────────
+    function startRename(btn) {
+      const titleDiv = btn.parentElement;
+      const span = titleDiv.querySelector('.title-text');
+      const slug = titleDiv.dataset.slug;
+      const current = span.textContent;
+      const input = document.createElement('input');
+      input.className = 'rename-input';
+      input.value = current;
+      span.replaceWith(input);
+      btn.style.display = 'none';
+      input.focus();
+      input.select();
+      async function commit() {
+        const newTitle = input.value.trim();
+        if (!newTitle || newTitle === current) { input.replaceWith(span); btn.style.display = ''; return; }
+        const res = await fetch(`/rename/${slug}`, {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ title: newTitle }),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          span.textContent = newTitle;
+          titleDiv.dataset.slug = data.new_slug;
+          const card = titleDiv.closest('.episode-card');
+          card.dataset.title = newTitle.toLowerCase();
+          card.dataset.sortTitle = newTitle.toLowerCase();
+          const audio = card.querySelector('audio');
+          if (audio) audio.src = `/static/audio/${data.new_slug}.mp3`;
+          const delBtn = card.querySelector('[onclick^="deleteEpisode"]');
+          if (delBtn) delBtn.setAttribute('onclick', `deleteEpisode('${data.new_slug}', this)`);
+          const saveBtn = card.querySelector('.meta-save-btn');
+          if (saveBtn) saveBtn.setAttribute('onclick', `saveMetaEditor(this, '${data.new_slug}')`);
+        }
+        input.replaceWith(span);
+        btn.style.display = '';
+      }
+      input.addEventListener('blur', commit);
+      input.addEventListener('keydown', e => {
+        if (e.key === 'Enter') input.blur();
+        if (e.key === 'Escape') { input.value = current; input.blur(); }
+      });
+    }
+
+    // ── REGENERATE AUDIO ─────────────────────────────────────
+    async function regenAudio(slug, btn) {
+      const orig = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = 'Voicing…';
+      try {
+        const res = await fetch(`/regenerate-audio/${slug}`, { method: 'POST' });
+        const data = await res.json();
+        if (!res.ok) { alert(data.error || 'Regen failed.'); return; }
+        // Swap the audio player src on this card
+        const card = btn.closest('.episode-card');
+        const audio = card.querySelector('audio');
+        if (audio) { audio.src = data.audio_url + '?t=' + Date.now(); audio.load(); }
+        btn.textContent = '✓ Done';
+        setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 2000);
+      } catch (err) {
+        alert('Regen failed: ' + err.message);
+        btn.textContent = orig;
+        btn.disabled = false;
+      }
+    }
+
+    // ── DELETE ────────────────────────────────────────────────
+    async function deleteEpisode(slug, btn) {
+      if (!confirm('Delete this episode and its audio file?')) return;
+      const res = await fetch(`/delete/${slug}`, { method: 'POST' });
+      if (res.ok) {
+        const card = btn.closest('.episode-card');
+        const idx = cards.indexOf(card);
+        if (idx > -1) cards.splice(idx, 1);
+        card.remove();
+        applyFilter();
+      } else {
+        alert('Delete failed.');
+      }
+    }
+  </script>
+
+</body>
+</html>

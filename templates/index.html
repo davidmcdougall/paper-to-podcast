@@ -1,0 +1,808 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Paper to Podcast</title>
+  <link rel="icon" type="image/png" href="/static/favicon.png">
+  <link rel="shortcut icon" href="/static/favicon.ico">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #0f0f12;
+      color: #e8e8f0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 48px 20px;
+    }
+
+    h1 {
+      font-size: 2rem;
+      font-weight: 700;
+      letter-spacing: -0.03em;
+      margin-bottom: 6px;
+      background: linear-gradient(135deg, #a78bfa, #60a5fa);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .subtitle {
+      color: #6b6b8a;
+      font-size: 0.95rem;
+      margin-bottom: 48px;
+    }
+
+    .card {
+      background: #17171f;
+      border: 1px solid #2a2a38;
+      border-radius: 16px;
+      padding: 32px;
+      width: 100%;
+      max-width: 680px;
+    }
+
+    /* ── Drop Zone ── */
+    #drop-zone {
+      display: block;
+      border: 2px dashed #2e2e44;
+      border-radius: 12px;
+      padding: 48px 24px;
+      text-align: center;
+      cursor: pointer;
+      transition: border-color 0.2s, background 0.2s;
+    }
+    /* Prevent child elements from firing dragleave when cursor moves through them */
+    #drop-zone svg, #drop-zone p { pointer-events: none; }
+
+    #drop-zone.drag-over {
+      border-color: #7c3aed;
+      background: #1e1a2e;
+    }
+
+    #drop-zone svg {
+      color: #4c4c6e;
+      margin-bottom: 12px;
+    }
+
+    #drop-zone p {
+      color: #6b6b8a;
+      font-size: 0.9rem;
+    }
+
+    #drop-zone p strong {
+      color: #a78bfa;
+    }
+
+    #file-input { display: none; }
+
+    #file-name {
+      margin-top: 16px;
+      font-size: 0.875rem;
+      color: #a0a0c0;
+      min-height: 20px;
+    }
+
+    /* ── Button ── */
+    #generate-btn {
+      margin-top: 24px;
+      width: 100%;
+      padding: 14px;
+      background: linear-gradient(135deg, #7c3aed, #3b82f6);
+      color: #fff;
+      font-size: 1rem;
+      font-weight: 600;
+      border: none;
+      border-radius: 10px;
+      cursor: pointer;
+      transition: opacity 0.2s;
+    }
+
+    #generate-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+    #generate-btn:not(:disabled):hover { opacity: 0.9; }
+
+    /* ── Progress ── */
+    #progress {
+      display: none;
+      margin-top: 28px;
+    }
+
+    .step {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 0;
+      font-size: 0.875rem;
+      color: #6b6b8a;
+      border-bottom: 1px solid #1e1e2a;
+    }
+
+    .step:last-child { border-bottom: none; }
+
+    .step-icon {
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      font-size: 0.75rem;
+    }
+
+    .step-icon.pending   { background: #1e1e2a; color: #4c4c6e; }
+    .step-icon.active    { background: #2e1a6e; color: #a78bfa; animation: pulse 1.2s ease-in-out infinite; }
+    .step-icon.done      { background: #14432a; color: #4ade80; }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50%       { opacity: 0.5; }
+    }
+
+    .step.active-step { color: #c4c4e0; }
+    .step.done-step   { color: #4b4b6a; }
+
+    /* ── Results ── */
+    #results {
+      display: none;
+      margin-top: 32px;
+    }
+
+    .result-title {
+      font-size: 1.1rem;
+      font-weight: 600;
+      color: #c8c8e8;
+      margin-bottom: 20px;
+      line-height: 1.4;
+    }
+
+    /* Audio player */
+    #audio-player {
+      width: 100%;
+      margin-bottom: 20px;
+      accent-color: #7c3aed;
+    }
+
+    /* Badges */
+    .badges {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-bottom: 20px;
+    }
+
+    .badge {
+      font-size: 0.75rem;
+      padding: 4px 10px;
+      border-radius: 20px;
+      background: #1e1e2a;
+      color: #6b6b8a;
+      border: 1px solid #2a2a38;
+    }
+
+    .badge.green {
+      background: #0d2a1a;
+      color: #4ade80;
+      border-color: #14432a;
+    }
+
+    /* Toggle */
+    .toggle-btn {
+      background: none;
+      border: 1px solid #2a2a38;
+      color: #6b6b8a;
+      font-size: 0.8rem;
+      padding: 6px 14px;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: color 0.2s, border-color 0.2s;
+      margin-bottom: 12px;
+    }
+
+    .toggle-btn:hover { color: #a78bfa; border-color: #7c3aed; }
+
+    #script-container {
+      display: none;
+      background: #0f0f16;
+      border: 1px solid #2a2a38;
+      border-radius: 10px;
+      padding: 20px;
+      max-height: 320px;
+      overflow-y: auto;
+      font-size: 0.85rem;
+      line-height: 1.8;
+      color: #9090b8;
+      white-space: pre-wrap;
+    }
+
+    #summary-container {
+      display: none;
+      background: #0f0f16;
+      border: 1px solid #2a2a38;
+      border-radius: 10px;
+      padding: 20px;
+      max-height: 280px;
+      overflow-y: auto;
+      font-size: 0.85rem;
+      line-height: 1.7;
+      color: #9090b8;
+      margin-top: 12px;
+    }
+
+    #summary-container h2, #summary-container h3 {
+      color: #c4c4e0;
+      font-size: 0.9rem;
+      margin: 12px 0 6px;
+    }
+
+    .toggle-row {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    /* Error */
+    #error-box {
+      display: none;
+      margin-top: 20px;
+      background: #2a0f0f;
+      border: 1px solid #5a1a1a;
+      border-radius: 10px;
+      padding: 16px;
+      color: #f87171;
+      font-size: 0.875rem;
+    }
+
+    /* Reset link */
+    #reset-btn {
+      display: none;
+      margin-top: 20px;
+      background: none;
+      border: none;
+      color: #6b6b8a;
+      font-size: 0.8rem;
+      cursor: pointer;
+      text-decoration: underline;
+    }
+
+    #reset-btn:hover { color: #a0a0c0; }
+
+    footer {
+      margin-top: 40px;
+      color: #3a3a52;
+      font-size: 0.75rem;
+    }
+  </style>
+</head>
+<body>
+
+  <img src="/static/logo.png" alt="Paper to Podcast" style="
+    width: 80px; height: 80px; border-radius: 16px;
+    margin-bottom: 18px; box-shadow: 0 4px 24px rgba(0,0,0,0.4);
+  ">
+  <h1>Paper to Podcast</h1>
+  <p class="subtitle">Drop an academic PDF. Get a podcast episode.</p>
+
+  <div class="card">
+
+    <!-- Drop zone: label for click-to-upload (for= connects to input below, outside label) -->
+    <!-- Input is OUTSIDE the label so Chrome doesn't intercept drag events via native file-input drop -->
+    <label id="drop-zone" for="file-input" tabindex="0" aria-label="Upload PDF">
+      <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+        <polyline points="14 2 14 8 20 8"/>
+        <line x1="12" y1="18" x2="12" y2="12"/>
+        <polyline points="9 15 12 12 15 15"/>
+      </svg>
+      <p><strong>Click to upload</strong> or drag &amp; drop</p>
+      <p style="margin-top:4px">PDF files only · text-based (not scanned)</p>
+    </label>
+    <input type="file" id="file-input" accept=".pdf" />
+    <div id="file-name"></div>
+
+    <!-- arXiv alternative -->
+    <div style="display:flex; align-items:center; gap:10px; margin-top:18px;">
+      <div style="flex:1; height:1px; background:#2a2a38;"></div>
+      <span style="color:#3a3a52; font-size:0.78rem; white-space:nowrap;">or paste arXiv ID / URL</span>
+      <div style="flex:1; height:1px; background:#2a2a38;"></div>
+    </div>
+    <div style="margin-top:12px;">
+      <input type="text" id="arxiv-input" placeholder="e.g. 2501.12345 or https://arxiv.org/abs/2501.12345" style="
+        width:100%; padding:10px 14px; background:#0f0f16; border:1px solid #2a2a38;
+        border-radius:8px; color:#c8c8e8; font-size:0.875rem; outline:none;
+      " autocomplete="off" spellcheck="false" />
+    </div>
+
+    <div style="margin-top:14px;">
+      <input type="text" id="custom-title" placeholder="Custom title (optional — defaults to filename / arXiv ID)" style="
+        width:100%; padding:10px 14px; background:#0f0f16; border:1px solid #2a2a38;
+        border-radius:8px; color:#c8c8e8; font-size:0.875rem; outline:none;
+      " />
+    </div>
+
+    <!-- Voice model toggle -->
+    <div style="margin-top:18px; display:flex; align-items:center; gap:10px;">
+      <span style="font-size:0.78rem; color:#6b6b8a; white-space:nowrap;">Voice quality</span>
+      <div id="model-toggle" style="display:flex; border:1px solid #2a2a38; border-radius:8px; overflow:hidden; flex:1;">
+        <button type="button" class="model-opt active" data-model="eleven_turbo_v2_5"
+          style="flex:1; padding:7px 10px; font-size:0.78rem; border:none; cursor:pointer;
+                 background:#1e1e2a; color:#a78bfa; transition:background 0.15s,color 0.15s;">
+          Fast · Turbo
+        </button>
+        <button type="button" class="model-opt" data-model="eleven_multilingual_v2"
+          style="flex:1; padding:7px 10px; font-size:0.78rem; border:none; cursor:pointer;
+                 background:#17171f; color:#6b6b8a; border-left:1px solid #2a2a38; transition:background 0.15s,color 0.15s;">
+          High quality · Multilingual v2 <span style="color:#4c4c6e">(2× credits)</span>
+        </button>
+      </div>
+      <input type="hidden" id="tts-model-input" value="eleven_turbo_v2_5" />
+    </div>
+
+    <!-- Script-first toggle -->
+    <div style="margin-top:10px; display:flex; align-items:center; gap:10px;">
+      <span style="font-size:0.78rem; color:#6b6b8a; white-space:nowrap;">Workflow</span>
+      <div style="display:flex; border:1px solid #2a2a38; border-radius:8px; overflow:hidden; flex:1;">
+        <button type="button" id="mode-full" class="mode-opt active"
+          style="flex:1; padding:7px 10px; font-size:0.78rem; border:none; cursor:pointer;
+                 background:#1e1e2a; color:#a78bfa; transition:background 0.15s,color 0.15s;">
+          Script + voice in one go
+        </button>
+        <button type="button" id="mode-script" class="mode-opt"
+          style="flex:1; padding:7px 10px; font-size:0.78rem; border:none; cursor:pointer;
+                 background:#17171f; color:#6b6b8a; border-left:1px solid #2a2a38; transition:background 0.15s,color 0.15s;">
+          Script first, voice later
+        </button>
+      </div>
+    </div>
+
+    <button id="generate-btn" disabled>Generate Episode</button>
+
+    <!-- Script preview panel (shown after generate-script completes) -->
+    <div id="script-preview" style="display:none; margin-top:28px;">
+      <div id="preview-title" style="font-size:1.05rem; font-weight:600; color:#c8c8e8; margin-bottom:14px; line-height:1.4;"></div>
+      <div id="preview-script" style="
+        background:#0f0f16; border:1px solid #2a2a38; border-radius:10px;
+        padding:18px; max-height:360px; overflow-y:auto;
+        font-size:0.85rem; line-height:1.8; color:#9090b8;
+        white-space:pre-wrap; font-family:Georgia,serif; margin-bottom:14px;
+      "></div>
+      <textarea id="regen-notes" placeholder="Notes for regeneration — optional. e.g. 'focus more on methodology', 'make the opening less technical'" style="
+        width:100%; box-sizing:border-box; background:#0f0f16; border:1px solid #2a2a38;
+        border-radius:10px; padding:12px 14px; color:#9090b8; font-size:0.82rem;
+        line-height:1.6; resize:vertical; min-height:60px; margin-bottom:12px;
+        font-family:inherit; outline:none;
+      "></textarea>
+      <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center;">
+        <button id="voice-btn" style="
+          padding:11px 22px; background:linear-gradient(135deg,#7c3aed,#3b82f6);
+          color:#fff; font-size:0.9rem; font-weight:600; border:none;
+          border-radius:10px; cursor:pointer; transition:opacity 0.2s;">
+          Voice this episode →
+        </button>
+        <button id="regen-script-btn" style="
+          padding:11px 18px; background:none; border:1px solid #2a2a38;
+          color:#6b6b8a; font-size:0.85rem; border-radius:10px;
+          cursor:pointer; transition:color 0.2s,border-color 0.2s;">
+          Regenerate script
+        </button>
+        <span id="preview-meta" style="font-size:0.78rem; color:#4c4c6e; margin-left:auto;"></span>
+      </div>
+      <!-- Voicing progress -->
+      <div id="voicing-progress" style="display:none; margin-top:20px;">
+        <div class="step active-step" style="display:flex; align-items:center; gap:12px; padding:10px 0; font-size:0.875rem; color:#c4c4e0;">
+          <div class="step-icon active" style="width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:0.75rem;background:#2e1a6e;color:#a78bfa;animation:pulse 1.2s ease-in-out infinite;">…</div>
+          <span>Voicing episode with ElevenLabs…</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Progress -->
+    <div id="progress">
+      <div class="step" id="step-extract">
+        <div class="step-icon pending" id="icon-extract">1</div>
+        <span>Extracting text from PDF</span>
+      </div>
+      <div class="step" id="step-script">
+        <div class="step-icon pending" id="icon-script">2</div>
+        <span>Writing podcast script with Claude</span>
+      </div>
+      <div class="step" id="step-summary">
+        <div class="step-icon pending" id="icon-summary">3</div>
+        <span>Generating research summary</span>
+      </div>
+      <div class="step" id="step-tts">
+        <div class="step-icon pending" id="icon-tts">4</div>
+        <span>Voicing episode with ElevenLabs</span>
+      </div>
+      <div class="step" id="step-save">
+        <div class="step-icon pending" id="icon-save">5</div>
+        <span>Saving to Obsidian vault</span>
+      </div>
+    </div>
+
+    <!-- Error -->
+    <div id="error-box"></div>
+
+    <!-- Results -->
+    <div id="results">
+      <div class="result-title" id="result-title"></div>
+
+      <audio id="audio-player" controls></audio>
+
+      <div class="badges" id="badges"></div>
+
+      <div class="toggle-row">
+        <button class="toggle-btn" id="toggle-script">Show script</button>
+        <button class="toggle-btn" id="toggle-summary">Show summary</button>
+      </div>
+
+      <div id="script-container"></div>
+      <div id="summary-container"></div>
+    </div>
+
+    <button id="reset-btn">← Process another paper</button>
+
+  </div>
+
+  <footer>
+    <a href="/library" style="color:#6b6b8a; text-decoration:none;">🎙 Episode library</a>
+    <span style="margin: 0 8px; color: #2a2a38;">·</span>
+    Text-based PDFs only · arXiv papers work great
+    <span style="margin: 0 8px; color: #2a2a38;">·</span>
+    <span title="cd ~/Documents/Claude/Projects/Paper\ to\ Podcast && python3 app.py" style="cursor:help; border-bottom: 1px dashed #3a3a52;">To restart: Ctrl+C → python3 app.py</span>
+  </footer>
+
+  <script>
+    // ── Model toggle ────────────────────────────────────────────
+    document.querySelectorAll('.model-opt').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.model-opt').forEach(b => {
+          b.style.background = '#17171f'; b.style.color = '#6b6b8a'; b.classList.remove('active');
+        });
+        btn.style.background = '#1e1e2a'; btn.style.color = '#a78bfa'; btn.classList.add('active');
+        document.getElementById('tts-model-input').value = btn.dataset.model;
+      });
+    });
+
+    // ── Workflow mode toggle ─────────────────────────────────────
+    let scriptFirstMode = false;
+    document.getElementById('mode-full').addEventListener('click', () => setMode(false));
+    document.getElementById('mode-script').addEventListener('click', () => setMode(true));
+
+    function setMode(scriptFirst) {
+      scriptFirstMode = scriptFirst;
+      const full   = document.getElementById('mode-full');
+      const script = document.getElementById('mode-script');
+      full.style.background   = scriptFirst ? '#17171f' : '#1e1e2a';
+      full.style.color        = scriptFirst ? '#6b6b8a' : '#a78bfa';
+      script.style.background = scriptFirst ? '#1e1e2a' : '#17171f';
+      script.style.color      = scriptFirst ? '#a78bfa' : '#6b6b8a';
+      generateBtn.textContent = scriptFirst ? 'Generate script' : 'Generate Episode';
+    }
+
+    const dropZone    = document.getElementById('drop-zone');
+    const fileInput   = document.getElementById('file-input');
+    const fileName    = document.getElementById('file-name');
+    const generateBtn = document.getElementById('generate-btn');
+    const progress    = document.getElementById('progress');
+    const errorBox    = document.getElementById('error-box');
+    const results     = document.getElementById('results');
+    const resetBtn    = document.getElementById('reset-btn');
+    const arxivInput  = document.getElementById('arxiv-input');
+
+    // ── arXiv auto-title ────────────────────────────────────────
+    let arxivMetaTimer = null;
+    arxivInput.addEventListener('input', () => {
+      updateGenerateBtn();
+      const val = arxivInput.value.trim();
+      clearTimeout(arxivMetaTimer);
+      // Only fetch if it looks like an arXiv ID (contains digits)
+      if (val.length > 4 && /\d/.test(val)) {
+        arxivMetaTimer = setTimeout(() => fetchArxivMeta(val), 700);
+      }
+    });
+
+    async function fetchArxivMeta(val) {
+      try {
+        const res  = await fetch(`/arxiv-meta?id=${encodeURIComponent(val)}`);
+        const data = await res.json();
+        const titleField = document.getElementById('custom-title');
+        if (data.title && !titleField.value.trim()) {
+          titleField.value = data.title;
+          titleField.style.borderColor = '#7c3aed';
+          setTimeout(() => { titleField.style.borderColor = ''; }, 1500);
+        }
+      } catch (_) {}
+    }
+
+    let selectedFile = null;
+
+    function updateGenerateBtn() {
+      generateBtn.disabled = !selectedFile && !arxivInput.value.trim();
+    }
+    // Note: arxivInput 'input' handler is registered in the auto-title block above (also calls updateGenerateBtn)
+
+    // ── File selection ──────────────────────────────────────────────
+    // Click is handled natively by <label> — no JS needed.
+    // Keydown for keyboard accessibility (Enter/Space on focused label).
+    dropZone.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') fileInput.click(); });
+
+    // ── Drag and drop ──────────────────────────────────────────────
+    // Handlers on the drop zone itself. pointer-events:none on children (CSS above)
+    // means dragleave only fires when the cursor truly leaves the drop zone boundary.
+    dropZone.addEventListener('dragenter', e => {
+      e.preventDefault();
+      dropZone.classList.add('drag-over');
+    });
+    dropZone.addEventListener('dragleave', () => {
+      dropZone.classList.remove('drag-over');
+    });
+    dropZone.addEventListener('dragover', e => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'copy'; // Required for Chrome to allow the drop
+    });
+    dropZone.addEventListener('drop', e => {
+      e.preventDefault();
+      e.stopPropagation();
+      dropZone.classList.remove('drag-over');
+      const file = e.dataTransfer.files[0];
+      if (file && file.name.toLowerCase().endsWith('.pdf')) setFile(file);
+      else if (file) showError('Please drop a PDF file.');
+    });
+
+    // Safety net: capture phase so these fire before Chrome's file-navigation default
+    document.addEventListener('dragover', e => e.preventDefault(), true);
+    document.addEventListener('drop', e => e.preventDefault(), true);
+
+    fileInput.addEventListener('change', () => {
+      if (fileInput.files[0]) setFile(fileInput.files[0]);
+    });
+
+    function setFile(file) {
+      selectedFile = file;
+      fileName.textContent = `📄 ${file.name} (${(file.size / 1024).toFixed(0)} KB)`;
+      arxivInput.value = '';   // clear arXiv field when a file is chosen
+      updateGenerateBtn();
+      hideError();
+    }
+
+    // ── Steps UI ────────────────────────────────────────────────────
+    const steps = ['extract', 'script', 'summary', 'tts', 'save'];
+
+    function setStep(name, state) {
+      const icon = document.getElementById(`icon-${name}`);
+      const row  = document.getElementById(`step-${name}`);
+      icon.className = `step-icon ${state}`;
+      row.className  = `step ${state === 'active' ? 'active-step' : state === 'done' ? 'done-step' : ''}`;
+      if (state === 'done') icon.textContent = '✓';
+      if (state === 'active') icon.textContent = '…';
+    }
+
+    function resetSteps() {
+      steps.forEach((s, i) => {
+        const icon = document.getElementById(`icon-${s}`);
+        icon.textContent = i + 1;
+        setStep(s, 'pending');
+      });
+    }
+
+    // ── Generate ────────────────────────────────────────────────────
+    let currentSlug = null;
+
+    function buildFormData() {
+      const fd = new FormData();
+      const av = arxivInput.value.trim();
+      if (av) fd.append('arxiv_id', av);
+      else if (selectedFile) fd.append('pdf', selectedFile);
+      fd.append('tts_model', document.getElementById('tts-model-input').value);
+      const ct = document.getElementById('custom-title').value.trim();
+      if (ct) fd.append('custom_title', ct);
+      const notes = document.getElementById('regen-notes').value.trim();
+      if (notes) fd.append('notes', notes);
+      return fd;
+    }
+
+    function startProgress(subset) {
+      generateBtn.disabled = true;
+      progress.style.display = 'block';
+      results.style.display  = 'none';
+      document.getElementById('script-preview').style.display = 'none';
+      resetBtn.style.display = 'none';
+      hideError();
+      resetSteps();
+      const durations = { extract: 500, script: 25000, summary: 4000, tts: 15000, save: 500 };
+      let si = 0;
+      function advance() {
+        if (si > 0) setStep(subset[si - 1], 'done');
+        if (si < subset.length) {
+          setStep(subset[si], 'active');
+          const next = subset[si + 1];
+          si++;
+          if (next) setTimeout(advance, durations[next] * 0.3);
+        }
+      }
+      advance();
+    }
+
+    generateBtn.addEventListener('click', () => {
+      scriptFirstMode ? runScriptOnly() : runFullGenerate();
+    });
+
+    async function runFullGenerate() {
+      startProgress(['extract','script','summary','tts','save']);
+      let data;
+      try {
+        const res = await fetch('/generate', { method: 'POST', body: buildFormData() });
+        data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Server error');
+      } catch (err) {
+        steps.forEach(s => setStep(s, 'pending'));
+        showError(err.message || 'Something went wrong. Check your API keys and try again.');
+        generateBtn.disabled = false;
+        return;
+      }
+      steps.forEach(s => setStep(s, 'done'));
+      showResults(data);
+    }
+
+    async function runScriptOnly() {
+      startProgress(['extract','script','summary']);
+      let data;
+      try {
+        const res = await fetch('/generate-script', { method: 'POST', body: buildFormData() });
+        data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Server error');
+      } catch (err) {
+        ['extract','script','summary'].forEach(s => setStep(s, 'pending'));
+        showError(err.message || 'Something went wrong.');
+        generateBtn.disabled = false;
+        return;
+      }
+      ['extract','script','summary'].forEach(s => setStep(s, 'done'));
+      progress.style.display = 'none';
+      currentSlug = data.slug;
+      document.getElementById('preview-title').textContent  = data.title;
+      document.getElementById('preview-script').textContent = data.script;
+      const mins = Math.round(data.word_count / 150);
+      document.getElementById('preview-meta').textContent   = `${data.word_count} words · ~${mins} min`;
+      document.getElementById('voicing-progress').style.display = 'none';
+      document.getElementById('voice-btn').disabled  = false;
+      document.getElementById('regen-script-btn').disabled = false;
+      document.getElementById('script-preview').style.display = 'block';
+      generateBtn.disabled = false;
+    }
+
+    document.getElementById('voice-btn').addEventListener('click', async () => {
+      if (!currentSlug) return;
+      const vBtn  = document.getElementById('voice-btn');
+      const rBtn  = document.getElementById('regen-script-btn');
+      const vProg = document.getElementById('voicing-progress');
+      vBtn.disabled = rBtn.disabled = true;
+      vProg.style.display = 'block';
+      try {
+        const res  = await fetch(`/regenerate-audio/${currentSlug}`, {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ tts_model: document.getElementById('tts-model-input').value }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Voicing failed');
+        document.getElementById('script-preview').style.display = 'none';
+        showResults({
+          title:     document.getElementById('preview-title').textContent,
+          script:    document.getElementById('preview-script').textContent,
+          summary:   '',
+          audio_url: data.audio_url,
+          word_count: parseInt(document.getElementById('preview-meta').textContent) || 0,
+          obsidian_saved: false,
+        });
+      } catch (err) {
+        vProg.style.display = 'none';
+        showError(err.message);
+        vBtn.disabled = rBtn.disabled = false;
+      }
+    });
+
+    document.getElementById('regen-script-btn').addEventListener('click', () => {
+      document.getElementById('script-preview').style.display = 'none';
+      runScriptOnly();
+    });
+
+    // ── Results ─────────────────────────────────────────────────────
+    function showResults(data) {
+      results.style.display = 'block';
+      resetBtn.style.display = 'block';
+
+      document.getElementById('result-title').textContent = data.title;
+
+      const player = document.getElementById('audio-player');
+      player.src = data.audio_url;
+      player.load();
+
+      const badges = document.getElementById('badges');
+      badges.innerHTML = '';
+      addBadge(badges, `${data.word_count} words`);
+
+      const mins = Math.round((data.word_count / 150));
+      addBadge(badges, `~${mins} min listen`);
+
+      if (data.obsidian_saved) {
+        addBadge(badges, '✓ Saved to Obsidian', 'green');
+      }
+
+      // Script toggle
+      const scriptContainer = document.getElementById('script-container');
+      scriptContainer.textContent = data.script;
+      const toggleScript = document.getElementById('toggle-script');
+      toggleScript.onclick = () => {
+        const open = scriptContainer.style.display === 'block';
+        scriptContainer.style.display = open ? 'none' : 'block';
+        toggleScript.textContent = open ? 'Show script' : 'Hide script';
+      };
+
+      // Summary toggle
+      const summaryContainer = document.getElementById('summary-container');
+      if (data.summary) {
+        summaryContainer.innerHTML = markdownToHtml(data.summary);
+        const toggleSummary = document.getElementById('toggle-summary');
+        toggleSummary.onclick = () => {
+          const open = summaryContainer.style.display === 'block';
+          summaryContainer.style.display = open ? 'none' : 'block';
+          toggleSummary.textContent = open ? 'Show summary' : 'Hide summary';
+        };
+      } else {
+        document.getElementById('toggle-summary').style.display = 'none';
+      }
+    }
+
+    function addBadge(container, text, cls = '') {
+      const b = document.createElement('span');
+      b.className = `badge ${cls}`.trim();
+      b.textContent = text;
+      container.appendChild(b);
+    }
+
+    // Minimal Markdown → HTML (headings + paragraphs only)
+    function markdownToHtml(md) {
+      return md
+        .replace(/^### (.+)$/gm, '<h3>$1</h3>')
+        .replace(/^## (.+)$/gm, '<h2>$1</h2>')
+        .replace(/^# (.+)$/gm, '<h2>$1</h2>')
+        .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+        .replace(/\n\n/g, '</p><p>')
+        .replace(/^(?!<h)(.+)$/gm, (m) => m.startsWith('<') ? m : `<p>${m}</p>`);
+    }
+
+    // ── Helpers ──────────────────────────────────────────────────────
+    function showError(msg) {
+      errorBox.style.display = 'block';
+      errorBox.textContent   = `⚠ ${msg}`;
+      progress.style.display = 'none';
+    }
+
+    function hideError() {
+      errorBox.style.display = 'none';
+    }
+
+    resetBtn.addEventListener('click', () => {
+      selectedFile = null;
+      currentSlug  = null;
+      fileInput.value = '';
+      fileName.textContent = '';
+      document.getElementById('custom-title').value = '';
+      arxivInput.value = '';
+      document.getElementById('script-preview').style.display = 'none';
+      document.getElementById('regen-notes').value = '';
+      generateBtn.disabled = true;
+      progress.style.display = 'none';
+      results.style.display  = 'none';
+      resetBtn.style.display = 'none';
+      hideError();
+      resetSteps();
+    });
+  </script>
+</body>
+</html>
