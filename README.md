@@ -2,7 +2,15 @@
 
 Upload an academic PDF → get a spoken podcast episode.
 
-Claude reads the paper and writes a 700–1000 word spoken script — expert-level analysis, no citations or equations, structured as a narrative argument. ElevenLabs voices it. If you configure Cloudflare R2, episodes are published to an RSS feed you can subscribe to in any podcast app.
+Claude reads the paper and writes a spoken script — expert-level analysis, no citations or equations, structured as a narrative argument. You choose the length and which Claude model writes it. ElevenLabs voices the result. If you configure Cloudflare R2, episodes are published to an RSS feed you can subscribe to in any podcast app.
+
+![The upload page — drop a PDF or paste an arXiv ID, then choose episode length and the Claude model.](docs/upload.png)
+
+*The upload page: drop a PDF or paste an arXiv ID, then pick the episode length and writing model.*
+
+![The episode library — every generated episode, browsable and playable.](docs/library.png)
+
+*The episode library: every generated episode, searchable and playable.*
 
 ---
 
@@ -125,7 +133,7 @@ By default, Paper to Podcast uses the first voice in your ElevenLabs account. To
 
 Two controls on the upload page shape each episode:
 
-- **Length** — choose a preset (Short ~3 min, Standard ~7 min, Long ~15 min, Deep dive ~25 min) or **Custom** and type a target in minutes (1–40). Longer targets pull in more of the source text, so this also suits book-length inputs. Set the default via presets; there's no env var for length.
+- **Length** — **Auto** (the default) lets the model size the episode to the paper: a slight paper gets a short episode, a dense one gets a longer treatment. Or force a preset (Short ~3 min, Standard ~7 min, Long ~15 min, Deep dive ~25 min) or **Custom** with a target in minutes (1–40). Longer targets pull in more of the source text, so this also suits book-length inputs.
 - **Writing model** — pick which Claude model writes the script (Opus for depth, Sonnet for balance, Haiku for speed/cost, Fable for a more creative voice). The default is `claude-sonnet-5`, overridable with `TEXT_MODEL` in `.env`.
 
 ---

@@ -348,13 +348,14 @@
     <div style="margin-top:18px; display:flex; align-items:center; gap:10px;">
       <span style="font-size:0.78rem; color:#6b6b8a; white-space:nowrap;">Length</span>
       <div id="length-toggle" style="display:flex; border:1px solid #2a2a38; border-radius:8px; overflow:hidden; flex:1;">
+        <button type="button" class="length-opt active" data-length="auto">Auto<small>model decides</small></button>
         <button type="button" class="length-opt" data-length="short">Short<small>~3 min</small></button>
-        <button type="button" class="length-opt active" data-length="standard">Standard<small>~7 min</small></button>
+        <button type="button" class="length-opt" data-length="standard">Standard<small>~7 min</small></button>
         <button type="button" class="length-opt" data-length="long">Long<small>~15 min</small></button>
         <button type="button" class="length-opt" data-length="deep">Deep dive<small>~25 min</small></button>
         <button type="button" class="length-opt" data-length="custom">Custom<small>&nbsp;</small></button>
       </div>
-      <input type="hidden" id="length-input" value="standard" />
+      <input type="hidden" id="length-input" value="auto" />
     </div>
     <div id="custom-length-row" style="display:none; margin-top:10px; align-items:center; gap:10px;">
       <span style="font-size:0.78rem; color:#6b6b8a; white-space:nowrap;">Target minutes</span>

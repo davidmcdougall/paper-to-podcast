@@ -70,7 +70,7 @@ LENGTH_PRESETS = {
     "long":     2200,   # ~15 min
     "deep":     3600,   # ~24 min
 }
-DEFAULT_LENGTH = "standard"
+DEFAULT_LENGTH = "auto"   # let the model choose the right length for the paper
 
 
 def resolve_model(form) -> str:
@@ -79,9 +79,11 @@ def resolve_model(form) -> str:
     return model if model in TEXT_MODELS else DEFAULT_TEXT_MODEL
 
 
-def resolve_target_words(form) -> int:
-    """Translate the length choice (preset or custom minutes) into a word target."""
+def resolve_target_words(form):
+    """Translate the length choice into a word target, or None to let the model decide."""
     length = (form.get("length") or DEFAULT_LENGTH).strip().lower()
+    if length == "auto":
+        return None
     if length == "custom":
         try:
             minutes = float(form.get("target_minutes", "7"))
@@ -89,7 +91,7 @@ def resolve_target_words(form) -> int:
             minutes = 7
         minutes = max(1.0, min(40.0, minutes))
         return int(round(minutes * WORDS_PER_MINUTE))
-    return LENGTH_PRESETS.get(length, LENGTH_PRESETS[DEFAULT_LENGTH])
+    return LENGTH_PRESETS.get(length, LENGTH_PRESETS["standard"])
 
 
 PODCAST_PROMPT = """You are writing a solo podcast episode on an academic paper. The style is intellectually intense, fast-moving, and substantive: a smart researcher thinking aloud, not a host performing surprise.
@@ -337,22 +339,35 @@ def extract_title(text: str) -> str:
 
 
 def generate_podcast_script(paper_text: str, notes: str = "",
-                            target_words: int = 1000, model: str = None) -> str:
+                            target_words: int = None, model: str = None) -> str:
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
     model = model if model in TEXT_MODELS else DEFAULT_TEXT_MODEL
 
+    auto = target_words is None
+    # For budgeting (tokens + input window), assume the upper end when auto.
+    budget_words = 2500 if auto else target_words
+
     # Longer scripts need broader coverage of the source; scale the input window.
-    input_cap = max(12000, target_words * 6)
+    input_cap = max(12000, budget_words * 6)
     truncated = smart_truncate(paper_text, input_cap)
 
     # Rewrite the prompt's length target to match the requested length.
-    low, high = max(150, round(target_words * 0.85)), round(target_words * 1.15)
-    prompt = PODCAST_PROMPT.replace("700–1000 words", f"{low}–{high} words")
+    if auto:
+        length_rule = (
+            "as long as the paper genuinely warrants, and no longer. Let the substance set the length: "
+            "a slight or single-result paper might need 500–700 spoken words; a dense, multi-result or "
+            "theoretically rich paper can justify 1500–2500. Never pad to fill time, and never compress so "
+            "hard the argument is lost. Choose the length that serves this specific paper"
+        )
+    else:
+        low, high = max(150, round(target_words * 0.85)), round(target_words * 1.15)
+        length_rule = f"{low}–{high} words"
+    prompt = PODCAST_PROMPT.replace("700–1000 words", length_rule)
 
     notes_section = f"\n\nAdditional instructions for this script:\n{notes.strip()}" if notes and notes.strip() else ""
 
     # Token budget must cover the (larger) output for long scripts.
-    out_tokens = int(target_words * 1.8) + 1500
+    out_tokens = int(budget_words * 1.8) + 1500
 
     # Pass 1: content and argument
     response = client.messages.create(
@@ -371,7 +386,7 @@ def generate_podcast_script(paper_text: str, notes: str = "",
     # Pass 2: voice edit — preserve all claims, improve speakability (Haiku: editing not reasoning)
     final = client.messages.create(
         model="claude-haiku-4-5-20251001",
-        max_tokens=int(target_words * 1.8) + 1000,
+        max_tokens=int(budget_words * 1.8) + 1000,
         messages=[
             {
                 "role": "user",
