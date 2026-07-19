@@ -51,6 +51,46 @@ R2_PUBLIC_URL     = os.getenv("R2_PUBLIC_URL", "").rstrip("/")  # e.g. https://p
 
 R2_ENABLED = all([R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_KEY, R2_PUBLIC_URL])
 
+# ── Script generation: models and length ─────────────────────────────────────
+# Current Claude text models the writing step can use. Keep in sync with the
+# dropdown in templates/index.html. Add or remove entries here freely.
+TEXT_MODELS = [
+    "claude-opus-4-8",             # highest quality / deepest reasoning
+    "claude-sonnet-5",             # balanced (default)
+    "claude-haiku-4-5-20251001",   # fastest / cheapest
+    "claude-fable-5",              # creative
+]
+DEFAULT_TEXT_MODEL = os.getenv("TEXT_MODEL", "claude-sonnet-5")
+
+# Length presets → target spoken word count. ~150 words per minute.
+WORDS_PER_MINUTE = 150
+LENGTH_PRESETS = {
+    "short":    450,    # ~3 min
+    "standard": 1000,   # ~7 min
+    "long":     2200,   # ~15 min
+    "deep":     3600,   # ~24 min
+}
+DEFAULT_LENGTH = "standard"
+
+
+def resolve_model(form) -> str:
+    """Pick the writing model from the request, falling back to the default."""
+    model = (form.get("model") or DEFAULT_TEXT_MODEL).strip()
+    return model if model in TEXT_MODELS else DEFAULT_TEXT_MODEL
+
+
+def resolve_target_words(form) -> int:
+    """Translate the length choice (preset or custom minutes) into a word target."""
+    length = (form.get("length") or DEFAULT_LENGTH).strip().lower()
+    if length == "custom":
+        try:
+            minutes = float(form.get("target_minutes", "7"))
+        except (TypeError, ValueError):
+            minutes = 7
+        minutes = max(1.0, min(40.0, minutes))
+        return int(round(minutes * WORDS_PER_MINUTE))
+    return LENGTH_PRESETS.get(length, LENGTH_PRESETS[DEFAULT_LENGTH])
+
 
 PODCAST_PROMPT = """You are writing a solo podcast episode on an academic paper. The style is intellectually intense, fast-moving, and substantive: a smart researcher thinking aloud, not a host performing surprise.
 
@@ -296,31 +336,42 @@ def extract_title(text: str) -> str:
     return "Untitled Paper"
 
 
-def generate_podcast_script(paper_text: str, notes: str = "") -> str:
+def generate_podcast_script(paper_text: str, notes: str = "",
+                            target_words: int = 1000, model: str = None) -> str:
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-    truncated = smart_truncate(paper_text, 12000)
+    model = model if model in TEXT_MODELS else DEFAULT_TEXT_MODEL
+
+    # Longer scripts need broader coverage of the source; scale the input window.
+    input_cap = max(12000, target_words * 6)
+    truncated = smart_truncate(paper_text, input_cap)
+
+    # Rewrite the prompt's length target to match the requested length.
+    low, high = max(150, round(target_words * 0.85)), round(target_words * 1.15)
+    prompt = PODCAST_PROMPT.replace("700–1000 words", f"{low}–{high} words")
 
     notes_section = f"\n\nAdditional instructions for this script:\n{notes.strip()}" if notes and notes.strip() else ""
 
-    # Pass 1: content and argument — extended thinking for deeper analysis
+    # Token budget must cover the (larger) output for long scripts.
+    out_tokens = int(target_words * 1.8) + 1500
+
+    # Pass 1: content and argument
     response = client.messages.create(
-        model="claude-sonnet-4-6",
-        max_tokens=14000,   # must exceed thinking budget + output
-        thinking={"type": "enabled", "budget_tokens": 10000},
+        model=model,
+        max_tokens=out_tokens,
         messages=[
             {
                 "role": "user",
-                "content": f"{PODCAST_PROMPT}{notes_section}\n\nHere is the paper:\n\n{truncated}",
+                "content": f"{prompt}{notes_section}\n\nHere is the paper:\n\n{truncated}",
             }
         ],
     )
-    # Extract the text block (skip the thinking block)
+    # Extract the first text block
     draft = next(b.text for b in response.content if b.type == "text")
 
     # Pass 2: voice edit — preserve all claims, improve speakability (Haiku: editing not reasoning)
     final = client.messages.create(
         model="claude-haiku-4-5-20251001",
-        max_tokens=3000,
+        max_tokens=int(target_words * 1.8) + 1000,
         messages=[
             {
                 "role": "user",
@@ -362,7 +413,7 @@ def generate_summary(paper_text: str, title: str) -> str:
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
     truncated = smart_truncate(paper_text, 8000)
     message = client.messages.create(
-        model="claude-sonnet-4-6",
+        model="claude-sonnet-5",
         max_tokens=900,
         messages=[
             {
@@ -722,9 +773,12 @@ def _prepare_episode(req):
         tts_model = "eleven_turbo_v2_5"
 
     notes = req.form.get("notes", "").strip()
+    target_words = resolve_target_words(req.form)
+    text_model   = resolve_model(req.form)
 
     try:
-        script = generate_podcast_script(paper_text, notes=notes)
+        script = generate_podcast_script(paper_text, notes=notes,
+                                         target_words=target_words, model=text_model)
     except Exception as e:
         return None, (jsonify({"error": f"Claude API error: {str(e)}"}), 500)
 

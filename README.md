@@ -121,6 +121,15 @@ By default, Paper to Podcast uses the first voice in your ElevenLabs account. To
 
 ---
 
+## Episode length and model
+
+Two controls on the upload page shape each episode:
+
+- **Length** — choose a preset (Short ~3 min, Standard ~7 min, Long ~15 min, Deep dive ~25 min) or **Custom** and type a target in minutes (1–40). Longer targets pull in more of the source text, so this also suits book-length inputs. Set the default via presets; there's no env var for length.
+- **Writing model** — pick which Claude model writes the script (Opus for depth, Sonnet for balance, Haiku for speed/cost, Fable for a more creative voice). The default is `claude-sonnet-5`, overridable with `TEXT_MODEL` in `.env`.
+
+---
+
 ## Notes
 
 - **Text-based PDFs only.** Scanned or image-based PDFs won't work — no OCR. arXiv papers work perfectly.
