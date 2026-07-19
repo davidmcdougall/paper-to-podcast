@@ -20,7 +20,7 @@ Claude reads the paper and writes a 700–1000 word spoken script — expert-lev
 **1. Clone the repo**
 
 ```bash
-git clone https://github.com/yourusername/paper-to-podcast.git
+git clone https://github.com/davidmcdougall/paper-to-podcast.git
 cd paper-to-podcast
 ```
 
