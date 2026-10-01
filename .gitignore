@@ -27,3 +27,11 @@ venv/
 # Local working files
 PROJECT_BRIEF.md
 _archive/
+
+# Additional local settings and persistence/recovery files
+.env.*
+!.env.example
+static/*.lock
+static/episodes.json.bak
+.pytest_cache/
+.coverage

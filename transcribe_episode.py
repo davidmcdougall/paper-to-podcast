@@ -1,61 +1,39 @@
-"""
-Transcribe an existing episode MP3 and patch it into episodes.json.
-
-Usage:
-    pip3 install -r requirements-optional.txt
-    python3 transcribe_episode.py <slug>
-
-Example:
-    python3 transcribe_episode.py attention-is-all-you-need
-"""
-
+"""Transcribe stored audio locally: python transcribe_episode.py <episode-id>. Requires FFmpeg."""
+import shutil
 import sys
-import json
 from pathlib import Path
+from filelock import FileLock
+import storage
+
+BASE = Path(__file__).resolve().parent
+
 
 def main():
-    if len(sys.argv) < 2:
-        print("Usage: python3 transcribe_episode.py <slug>")
-        sys.exit(1)
-
+    if len(sys.argv) != 2 or not storage.valid_id(sys.argv[1]):
+        raise SystemExit('Usage: python transcribe_episode.py <episode-id>')
     slug = sys.argv[1]
-    mp3_path = Path(f"static/audio/{slug}.mp3")
-    episodes_path = Path("static/episodes.json")
+    episodes = BASE / 'static/episodes.json'
+    with FileLock(str(episodes)+'.operation.lock', timeout=0):
+        ep = next((e for e in storage.load(episodes) if e['slug'] == slug), None)
+        if ep is None:
+            raise SystemExit('Episode not found; no model was downloaded.')
+        name = ep.get('local_audio') or slug+'.mp3'
+        if Path(name).name != name or '\\' in name:
+            raise SystemExit('Invalid stored audio filename.')
+        mp3 = BASE/'static/audio'/name
+        if not mp3.is_file():
+            raise SystemExit('Episode audio does not exist.')
+        if not shutil.which('ffmpeg'):
+            raise SystemExit('Install FFmpeg and make ffmpeg available on PATH before transcribing.')
+        import whisper
+        print('Loading Whisper base (downloads model on first use)…')
+        script = whisper.load_model('base').transcribe(str(mp3))['text'].strip()
+        if not script:
+            raise SystemExit('Empty transcription; episode preserved.')
+        storage.update(episodes, slug, {'script': script, 'word_count': len(script.split()),
+                                      'character_count': len(script)})
+        print('Transcription saved. Review it before re-voicing; transcription can contain errors.')
 
-    if not mp3_path.exists():
-        print(f"Error: {mp3_path} not found")
-        sys.exit(1)
 
-    print(f"Loading Whisper model (this may take a minute on first run)...")
-    import whisper
-    model = whisper.load_model("base")
-
-    print(f"Transcribing {mp3_path}...")
-    result = model.transcribe(str(mp3_path))
-    script = result["text"].strip()
-
-    print(f"\n--- Transcribed script ({len(script.split())} words) ---\n")
-    print(script[:500] + "..." if len(script) > 500 else script)
-    print("\n---\n")
-
-    # Patch into episodes.json
-    episodes = json.loads(episodes_path.read_text())
-    patched = False
-    for ep in episodes:
-        if ep.get("slug") == slug:
-            ep["script"] = script
-            if ep.get("word_count", 0) == 0:
-                ep["word_count"] = len(script.split())
-            patched = True
-            print(f"Patched '{ep['title']}' in episodes.json")
-            break
-
-    if not patched:
-        print(f"Warning: slug '{slug}' not found in episodes.json")
-        sys.exit(1)
-
-    episodes_path.write_text(json.dumps(episodes, indent=2, ensure_ascii=False))
-    print("Done. Refresh the library to see the script.")
-
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

@@ -1,5 +1,5 @@
 # Paper to Podcast — Script Prompt Evaluation
-*Two examples, old vs new, with prompt and analysis. Prepared for external review.*
+*Historical prompt-design notes. These examples were not fact-checked against their sources and are not validation of the current prompt or model. Named style references describe an earlier experiment, not affiliation or endorsement. Treat all generated claims and the evaluative commentary below as unverified.*
 
 ---
 

@@ -1,27 +1,22 @@
-"""Upload the podcast logo to Cloudflare R2. Expects the artwork at static/logo.png. Run once from this folder."""
-import os, boto3
-from botocore.client import Config
-from dotenv import load_dotenv
+"""Upload your own static/logo.png to the configured public R2 bucket."""
+from pathlib import Path
 
-load_dotenv()
 
-s3 = boto3.client(
-    "s3",
-    endpoint_url=f"https://{os.getenv('R2_ACCOUNT_ID')}.r2.cloudflarestorage.com",
-    aws_access_key_id=os.getenv("R2_ACCESS_KEY_ID"),
-    aws_secret_access_key=os.getenv("R2_SECRET_KEY"),
-    config=Config(signature_version="s3v4"),
-    region_name="auto",
-)
+def main():
+    logo = Path(__file__).resolve().parent/'static/logo.png'
+    if not logo.is_file():
+        raise SystemExit('Missing static/logo.png. Supply a square PNG you have permission to publish.')
+    if logo.stat().st_size > 10*1024*1024 or not logo.read_bytes().startswith(b'\x89PNG\r\n\x1a\n'):
+        raise SystemExit('Logo must be a PNG under 10 MiB.')
+    from app import R2_ENABLED, upload_to_r2
+    if not R2_ENABLED:
+        raise SystemExit('Complete the R2 settings in .env before uploading artwork.')
+    try:
+        url = upload_to_r2(logo, 'images/logo.png', 'image/png')
+    except Exception:
+        raise SystemExit('Logo upload failed. Check R2 credentials, bucket and network access.')
+    print('Published logo: '+url)
 
-logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "logo.png")
-with open(logo_path, "rb") as f:
-    s3.put_object(
-        Bucket=os.getenv("R2_BUCKET"),
-        Key="images/logo.png",
-        Body=f,
-        ContentType="image/png",
-    )
 
-print("✓ Logo uploaded to R2")
-print(f"  URL: {os.getenv('R2_PUBLIC_URL')}/images/logo.png")
+if __name__ == '__main__':
+    main()
