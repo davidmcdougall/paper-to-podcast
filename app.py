@@ -1,6 +1,7 @@
 import os
 import re
 import sys
+import time
 import json
 import datetime
 import urllib.request
@@ -58,17 +59,81 @@ R2_PUBLIC_URL     = os.getenv("R2_PUBLIC_URL", "").rstrip("/")  # e.g. https://p
 R2_ENABLED = all([R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_KEY, R2_PUBLIC_URL])
 
 # ── Script generation: models and length ─────────────────────────────────────
-# Claude models are configured in .env so the app doesn't go stale as model
-# names change. Use any model ID your Anthropic account can access.
-#   TEXT_MODEL          writing model (default below)
-#   FAST_MODEL          cheaper model for metadata and show notes
-#   TEXT_MODEL_OPTIONS  optional comma-separated list; if set, the upload page
-#                       shows a dropdown so you can pick a model per episode
-DEFAULT_TEXT_MODEL = os.getenv("TEXT_MODEL", "").strip() or "claude-sonnet-5"
-FAST_MODEL = os.getenv("FAST_MODEL", "").strip() or "claude-haiku-4-5-20251001"
-TEXT_MODELS = [m.strip() for m in os.getenv("TEXT_MODEL_OPTIONS", "").split(",") if m.strip()]
-if DEFAULT_TEXT_MODEL not in TEXT_MODELS:
-    TEXT_MODELS.insert(0, DEFAULT_TEXT_MODEL)
+# Claude models: nothing here is pinned. Model names change and old ones get
+# retired, so by default the app asks Anthropic's Models API which models your
+# key can use and picks the newest in each family:
+#   writing model -> newest "sonnet"   (override: TEXT_MODEL)
+#   fast model    -> newest "haiku"    (override: FAST_MODEL)
+#   dropdown      -> newest model of each family (override: TEXT_MODEL_OPTIONS,
+#                    comma-separated; if only one model is offered, no dropdown)
+# The families to prefer can be changed with TEXT_MODEL_FAMILY / FAST_MODEL_FAMILY.
+# LAST_RESORT_* is used only if the Models API can't be reached and nothing is
+# set in .env.
+TEXT_MODEL_FAMILY = os.getenv("TEXT_MODEL_FAMILY", "").strip().lower() or "sonnet"
+FAST_MODEL_FAMILY = os.getenv("FAST_MODEL_FAMILY", "").strip().lower() or "haiku"
+LAST_RESORT_TEXT_MODEL = "claude-sonnet-5"
+LAST_RESORT_FAST_MODEL = "claude-haiku-4-5-20251001"
+
+_MODEL_CACHE = {"until": 0.0, "ids": []}
+_MODEL_CACHE_TTL = 3600  # seconds
+
+
+def _family(model_id: str) -> str:
+    """'claude-3-5-sonnet-2024..' -> 'sonnet'; 'claude-opus-4-8' -> 'opus'."""
+    for tok in model_id.split("-")[1:]:
+        if tok.isalpha():
+            return tok.lower()
+    return ""
+
+
+def available_models() -> list:
+    """Model IDs this API key can use, newest first. Empty if unreachable."""
+    if time.time() < _MODEL_CACHE["until"]:
+        return _MODEL_CACHE["ids"]
+    ids, ttl = [], 60  # retry soon after a failure
+    if ANTHROPIC_API_KEY:
+        try:
+            page = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY).models.list(limit=100)
+            items = sorted(page.data, key=lambda m: m.created_at, reverse=True)
+            ids = [m.id for m in items if m.id.startswith("claude")]
+            ttl = _MODEL_CACHE_TTL
+        except Exception as exc:
+            print(f"WARNING: couldn't list Claude models ({exc}); using .env or built-in defaults.",
+                  file=sys.stderr)
+    ids = ids or _MODEL_CACHE["ids"]  # keep the last good list if this call failed
+    _MODEL_CACHE.update(until=time.time() + ttl, ids=ids)
+    return ids
+
+
+def _newest_in_family(family: str):
+    return next((m for m in available_models() if _family(m) == family), None)
+
+
+def default_text_model() -> str:
+    return (os.getenv("TEXT_MODEL", "").strip()
+            or _newest_in_family(TEXT_MODEL_FAMILY)
+            or (available_models() or [LAST_RESORT_TEXT_MODEL])[0])
+
+
+def fast_model() -> str:
+    return (os.getenv("FAST_MODEL", "").strip()
+            or _newest_in_family(FAST_MODEL_FAMILY)
+            or (default_text_model() if available_models() else LAST_RESORT_FAST_MODEL))
+
+
+def text_model_options() -> list:
+    """Models offered in the upload-page dropdown (default model always first)."""
+    configured = [m.strip() for m in os.getenv("TEXT_MODEL_OPTIONS", "").split(",") if m.strip()]
+    if configured:
+        options = configured
+    else:
+        seen, options = set(), []
+        for m in available_models():  # newest first, so first hit per family wins
+            if _family(m) not in seen:
+                seen.add(_family(m))
+                options.append(m)
+    default = default_text_model()
+    return [default] + [m for m in options if m != default]
 
 # Length presets → target spoken word count. ~150 words per minute.
 WORDS_PER_MINUTE = 150
@@ -83,8 +148,8 @@ DEFAULT_LENGTH = "auto"   # let the model choose the right length for the paper
 
 def resolve_model(form) -> str:
     """Pick the writing model from the request, falling back to the default."""
-    model = (form.get("model") or DEFAULT_TEXT_MODEL).strip()
-    return model if model in TEXT_MODELS else DEFAULT_TEXT_MODEL
+    model = (form.get("model") or "").strip()
+    return model if model in text_model_options() else default_text_model()
 
 
 def resolve_target_words(form):
@@ -349,7 +414,7 @@ def extract_title(text: str) -> str:
 def generate_podcast_script(paper_text: str, notes: str = "",
                             target_words: int = None, model: str = None) -> str:
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-    model = model if model in TEXT_MODELS else DEFAULT_TEXT_MODEL
+    model = model if model in text_model_options() else default_text_model()
 
     auto = target_words is None
     # For budgeting (tokens + input window), assume the upper end when auto.
@@ -393,7 +458,7 @@ def generate_podcast_script(paper_text: str, notes: str = "",
 
     # Pass 2: voice edit — preserve all claims, improve speakability (Haiku: editing not reasoning)
     final = client.messages.create(
-        model=FAST_MODEL,
+        model=fast_model(),
         max_tokens=int(budget_words * 1.8) + 1000,
         messages=[
             {
@@ -413,7 +478,7 @@ def extract_metadata(paper_text: str) -> dict:
     truncated = " ".join(paper_text.split()[:3000])
     try:
         message = client.messages.create(
-            model=FAST_MODEL,
+            model=fast_model(),
             max_tokens=300,
             messages=[
                 {
@@ -436,7 +501,7 @@ def generate_summary(paper_text: str, title: str) -> str:
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
     truncated = smart_truncate(paper_text, 8000)
     message = client.messages.create(
-        model=DEFAULT_TEXT_MODEL,
+        model=default_text_model(),
         max_tokens=900,
         messages=[
             {
@@ -461,7 +526,7 @@ def generate_show_notes(paper_text: str, title: str, authors: list = None) -> st
         else:
             byline = f" by {authors[0]} and colleagues"
     message = client.messages.create(
-        model=FAST_MODEL,
+        model=fast_model(),
         max_tokens=300,
         messages=[{
             "role": "user",
@@ -708,7 +773,7 @@ tags:
 
 @app.route("/")
 def index():
-    return render_template("index.html", text_models=TEXT_MODELS, default_model=DEFAULT_TEXT_MODEL)
+    return render_template("index.html", text_models=text_model_options(), default_model=default_text_model())
 
 
 @app.route("/library")

@@ -138,7 +138,7 @@ By default, Paper to Podcast uses the first voice in your ElevenLabs account. To
 Two controls on the upload page shape each episode:
 
 - **Length** — **Auto** (the default) lets the model size the episode to the paper: a slight paper gets a short episode, a dense one gets a longer treatment. Or force a preset (Short ~3 min, Standard ~7 min, Long ~15 min, Deep dive ~25 min) or **Custom** with a target in minutes (1–40). Longer targets pull in more of the source text, so this also suits book-length inputs.
-- **Writing model** — set by `TEXT_MODEL` in `.env` (any Claude model ID your Anthropic account can use). To choose a model per episode, list several in `TEXT_MODEL_OPTIONS` (comma-separated) and a dropdown appears on the upload page. `FAST_MODEL` sets the cheaper model used for metadata and show notes. Model names change over time, so nothing is hard-coded beyond the defaults.
+- **Writing model** — nothing is pinned. On startup the app asks Anthropic's Models API which models your key can use, writes with the newest Sonnet, and uses the newest Haiku for metadata and show notes. The upload page's dropdown lists the newest model of each family (Opus, Sonnet, Haiku and so on), so new releases appear automatically and retired ones disappear. To pin a model, set `TEXT_MODEL` / `FAST_MODEL` in `.env`; to change the dropdown, set `TEXT_MODEL_OPTIONS`; to prefer another family, set `TEXT_MODEL_FAMILY` / `FAST_MODEL_FAMILY`. If the Models API can't be reached and nothing is set, the app falls back to built-in defaults.
 
 ---
 
