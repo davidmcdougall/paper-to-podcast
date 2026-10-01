@@ -16,14 +16,119 @@ Claude reads the paper and writes a spoken script — expert-level analysis, no 
 
 ## What you need
 
-- Python 3.10+
-- An [Anthropic API key](https://console.anthropic.com) — Claude does the writing (~$0.05–0.20 per episode with Sonnet)
-- An [ElevenLabs API key](https://elevenlabs.io) — voices the script (~$0.10–0.30 per episode)
-- *(Optional)* A [Cloudflare R2](https://developers.cloudflare.com/r2/) account for podcast feed hosting (free tier covers most personal use)
+- **Python 3.10 or newer** (free, from [python.org](https://www.python.org/downloads/)).
+- **An [Anthropic API key](https://console.anthropic.com)** — Claude writes the script. Add a few dollars of credit under Billing in the Console first; the key won't work without it. Roughly **$0.05–0.25 per episode**.
+- **An [ElevenLabs](https://elevenlabs.io) API key on a paid plan** — it voices the script. The free plan does **not** work: ElevenLabs doesn't allow its Voice Library voices through the API on the free tier, and this app uses the voices in your account. The cheapest paid plan, **Starter (about $6/month, 30,000 credits)**, is enough to get going.
+- *(Optional)* A [Cloudflare R2](https://developers.cloudflare.com/r2/) account to publish a podcast feed (the free tier covers most personal use).
+
+### What it costs
+
+Two things cost money: Claude writing the script (cents) and ElevenLabs voicing it (the larger part). ElevenLabs charges per character, and a spoken minute is roughly 900 characters. On the default fast voice (Turbo), Starter's 30,000 monthly credits stretch like this:
+
+| Episode length | Characters | ElevenLabs credits (fast voice) | Episodes per month on Starter |
+|---|---|---|---|
+| Short (~3 min) | ~2,700 | ~1,350 | ~22 |
+| Standard (~7 min) | ~6,300 | ~3,150 | ~9 |
+| Long (~15 min) | ~13,500 | ~6,750 | ~4 |
+| Deep dive (~25 min) | ~22,500 | ~11,250 | ~2 |
+
+The "High quality" voice option uses about twice the credits, so halve the last column. These are estimates; plans, credit rates and prices change, so check [ElevenLabs pricing](https://elevenlabs.io/pricing) and [Anthropic pricing](https://platform.claude.com/docs/en/about-claude/pricing). Add Claude's cents on top, and a Standard episode costs very roughly a few tens of cents to under a dollar in total. Try a Short episode first.
 
 ---
 
-## Setup
+## Quick start (never done this before?)
+
+This takes about 15 minutes. You'll type a few commands into a **terminal**: on a Mac, open the **Terminal** app (press Cmd+Space, type "Terminal"); on Windows, open **PowerShell** (press the Windows key, type "PowerShell"). Type each command and press Enter. Lines starting with `#` are comments, so don't type them.
+
+**1. Check Python.** Run one of these:
+
+```bash
+python3 --version     # Mac
+py --version          # Windows
+```
+
+You need 3.10 or higher. If you get "command not found" or an older number, install Python from [python.org](https://www.python.org/downloads/) (on Windows, tick **"Add python.exe to PATH"** in the installer), then close and reopen the terminal.
+
+**2. Get the code.** Easiest: on this GitHub page click the green **Code** button → **Download ZIP**, unzip it (the folder is called `paper-to-podcast-main`), and move it somewhere you'll find it, such as your Documents folder. Then point the terminal at it:
+
+```bash
+cd ~/Documents/paper-to-podcast-main       # Mac (adjust if you put it elsewhere)
+cd $HOME\Documents\paper-to-podcast-main  # Windows PowerShell
+```
+
+(If you know git, `git clone` works too.)
+
+**3. Create a private Python environment and install the app.** This keeps its packages separate from the rest of your computer.
+
+```bash
+# Mac
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+```powershell
+# Windows PowerShell
+py -m venv .venv
+.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+```
+
+You'll see `(.venv)` at the start of your prompt when it's active. If Windows blocks the activate script, run `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` once and try again.
+
+**4. Get your two API keys** (a key is a long password the app uses to act on your account):
+
+- Anthropic: sign in at [console.anthropic.com](https://console.anthropic.com), add a few dollars under **Billing**, then **API Keys → Create Key**. Copy it straight away; it's only shown once.
+- ElevenLabs: you need a paid plan (see above). Then click your profile → **API Keys** → create one.
+
+**5. Put the keys in a settings file.** The settings file is called `.env` (note the dot at the start). Files starting with a dot are hidden in Finder and Explorer, so create and open it from the terminal:
+
+```bash
+# Mac
+cp .env.example .env
+open -e .env
+```
+
+```powershell
+# Windows PowerShell
+copy .env.example .env
+notepad .env
+```
+
+Replace the two placeholder values with your keys, **with no quotes and no spaces around the `=`**:
+
+```
+ANTHROPIC_API_KEY=sk-ant-...your key...
+ELEVENLABS_API_KEY=...your key...
+```
+
+Save and close. Everything else in the file is optional. Never share this file or post it online.
+
+**6. Start the app.**
+
+```bash
+python app.py
+```
+
+You should see a line saying `Running on http://127.0.0.1:5050`. Leave this window open, and open [http://localhost:5050](http://localhost:5050) in your browser. If you see a "WARNING: ... API_KEY is not set" line, the `.env` file isn't being picked up: check it's in the same folder as `app.py` and saved.
+
+**7. Make your first episode.** Paste the arXiv ID `1706.03762` (a famous paper), choose **Short**, and press Generate. It takes a minute or two, then you can play it and find it in the library at [http://localhost:5050/library](http://localhost:5050/library).
+
+**To stop the app:** click the terminal window and press Ctrl+C. **Next time:** open a terminal, `cd` into the folder, activate the environment again (`source .venv/bin/activate` on Mac, `.venv\Scripts\Activate.ps1` on Windows), and run `python app.py`.
+
+### If something goes wrong
+
+- **`command not found` / `not recognized`:** Python isn't installed or isn't on your PATH. Reinstall it and tick the PATH option (Windows), then reopen the terminal.
+- **`ModuleNotFoundError`:** the environment isn't active. Run the activate command from step 3 and try again.
+- **`externally-managed-environment`:** you skipped the environment in step 3. Do it, then `pip install` again.
+- **Claude error mentioning credit or authentication:** check your key and that you've added credit in the Anthropic Console.
+- **ElevenLabs error, "voice not available", or "no voices":** you're probably on the free plan. Upgrade to a paid plan and generate again.
+- **"Address already in use":** another copy of the app is still running. Close its terminal window, or restart your computer.
+- **Nothing plays:** open the library page and check the episode is listed; try a different browser if the player is blank.
+
+---
+
+## Setup (for experienced users)
 
 **1. Clone the repo**
 
@@ -145,7 +250,7 @@ Two controls on the upload page shape each episode:
 ## Notes
 
 - **Text-based PDFs only.** Scanned or image-based PDFs won't work — no OCR. arXiv papers work perfectly.
-- **Cost.** A typical paper costs roughly $0.15–0.50 total across Claude and ElevenLabs. The writing model does two passes; the fast model handles cheaper tasks like metadata and show notes.
+- **Cost.** See [What it costs](#what-it-costs). ElevenLabs credits are the main expense; Claude adds cents per episode.
 - **Local use only.** The server has no login and binds to `127.0.0.1`. Don't expose port 5050 to a network, and leave `FLASK_DEBUG` unset unless you're developing (debug mode adds an interactive debugger).
 - **Optional: transcribing old episodes.** `transcribe_episode.py` needs Whisper: `pip install -r requirements-optional.txt`.
 - **Episode library.** Browse all episodes at [http://localhost:5050/library](http://localhost:5050/library).
