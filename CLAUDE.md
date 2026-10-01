@@ -24,26 +24,6 @@ python3 app.py
 # Opens at http://localhost:5050
 ```
 
-## Project structure
-
-```
-paper-to-podcast/
-├── app.py                      # Flask backend (port 5050) — the main file
-├── templates/
-│   ├── index.html              # Upload UI
-│   └── library.html            # Episode library
-├── static/
-│   ├── audio/                  # Generated MP3s (gitignored)
-│   ├── pdfs/                   # Uploaded source PDFs (gitignored)
-│   ├── episodes.json           # Episode index (gitignored)
-│   └── feed.xml                # Generated RSS feed (gitignored)
-├── transcribe_episode.py       # Utility: transcribe an existing MP3 → patch episodes.json
-├── upload_logo.py              # Utility: upload podcast artwork to R2
-├── requirements.txt
-├── .env.example
-└── script-prompt-evaluation.md # Notes on the script-generation prompt
-```
-
 ## Configuration
 
 All configuration is via environment variables — see `.env.example` for the full list with explanations. Required: `ANTHROPIC_API_KEY`, `ELEVENLABS_API_KEY`. Optional: podcast identity (`PODCAST_TITLE`, `PODCAST_DESCRIPTION`, `PODCAST_AUTHOR`), a specific ElevenLabs voice, an Obsidian vault path for Markdown summaries, and Cloudflare R2 credentials to enable the published podcast feed.

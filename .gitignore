@@ -23,3 +23,7 @@ venv/
 
 # macOS
 .DS_Store
+
+# Local working files
+PROJECT_BRIEF.md
+_archive/

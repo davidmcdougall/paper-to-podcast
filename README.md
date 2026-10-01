@@ -10,7 +10,7 @@ Claude reads the paper and writes a spoken script — expert-level analysis, no 
 
 ![The episode library — every generated episode, browsable and playable.](docs/library.png)
 
-*The episode library: every generated episode, searchable and playable.*
+*The episode library: every generated episode, searchable and playable (sample episodes shown).*
 
 ---
 
@@ -90,9 +90,13 @@ R2_BUCKET=paper-to-podcast
 R2_PUBLIC_URL=https://pub-xxxx.r2.dev
 ```
 
-**4. Upload a podcast logo** *(optional but recommended)*
+**4. Add a podcast logo** *(optional but recommended)*
 
-Podcast apps display artwork. Upload a square PNG (3000×3000px recommended) to `images/logo.png` in your R2 bucket.
+Podcast apps display artwork. Save a square PNG (3000×3000px recommended) as `static/logo.png` — it also appears in the web UI header. Then publish it to your feed:
+
+```bash
+python3 upload_logo.py
+```
 
 **5. Subscribe**
 

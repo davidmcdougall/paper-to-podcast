@@ -1,4 +1,4 @@
-"""Upload the podcast logo to Cloudflare R2. Run once from this folder."""
+"""Upload the podcast logo to Cloudflare R2. Expects the artwork at static/logo.png. Run once from this folder."""
 import os, boto3
 from botocore.client import Config
 from dotenv import load_dotenv
@@ -14,7 +14,7 @@ s3 = boto3.client(
     region_name="auto",
 )
 
-logo_path = "Paper to Podcast logo.png"
+logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "logo.png")
 with open(logo_path, "rb") as f:
     s3.put_object(
         Bucket=os.getenv("R2_BUCKET"),
