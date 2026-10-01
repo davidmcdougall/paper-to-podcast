@@ -1,5 +1,6 @@
 import os
 import re
+import sys
 import json
 import datetime
 import urllib.request
@@ -34,6 +35,11 @@ EPISODES_FILE = Path("static/episodes.json")
 
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
+
+for _name, _val in (("ANTHROPIC_API_KEY", ANTHROPIC_API_KEY), ("ELEVENLABS_API_KEY", ELEVENLABS_API_KEY)):
+    if not _val:
+        print(f"WARNING: {_name} is not set. Copy .env.example to .env and add it, "
+              "or episode generation will fail.", file=sys.stderr)
 ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID", "")
 OBSIDIAN_VAULT_PATH = os.getenv("OBSIDIAN_VAULT_PATH", "")
 
@@ -52,15 +58,17 @@ R2_PUBLIC_URL     = os.getenv("R2_PUBLIC_URL", "").rstrip("/")  # e.g. https://p
 R2_ENABLED = all([R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_KEY, R2_PUBLIC_URL])
 
 # ── Script generation: models and length ─────────────────────────────────────
-# Current Claude text models the writing step can use. Keep in sync with the
-# dropdown in templates/index.html. Add or remove entries here freely.
-TEXT_MODELS = [
-    "claude-opus-4-8",             # highest quality / deepest reasoning
-    "claude-sonnet-5",             # balanced (default)
-    "claude-haiku-4-5-20251001",   # fastest / cheapest
-    "claude-fable-5",              # creative
-]
-DEFAULT_TEXT_MODEL = os.getenv("TEXT_MODEL", "claude-sonnet-5")
+# Claude models are configured in .env so the app doesn't go stale as model
+# names change. Use any model ID your Anthropic account can access.
+#   TEXT_MODEL          writing model (default below)
+#   FAST_MODEL          cheaper model for metadata and show notes
+#   TEXT_MODEL_OPTIONS  optional comma-separated list; if set, the upload page
+#                       shows a dropdown so you can pick a model per episode
+DEFAULT_TEXT_MODEL = os.getenv("TEXT_MODEL", "").strip() or "claude-sonnet-5"
+FAST_MODEL = os.getenv("FAST_MODEL", "").strip() or "claude-haiku-4-5-20251001"
+TEXT_MODELS = [m.strip() for m in os.getenv("TEXT_MODEL_OPTIONS", "").split(",") if m.strip()]
+if DEFAULT_TEXT_MODEL not in TEXT_MODELS:
+    TEXT_MODELS.insert(0, DEFAULT_TEXT_MODEL)
 
 # Length presets → target spoken word count. ~150 words per minute.
 WORDS_PER_MINUTE = 150
@@ -385,7 +393,7 @@ def generate_podcast_script(paper_text: str, notes: str = "",
 
     # Pass 2: voice edit — preserve all claims, improve speakability (Haiku: editing not reasoning)
     final = client.messages.create(
-        model="claude-haiku-4-5-20251001",
+        model=FAST_MODEL,
         max_tokens=int(budget_words * 1.8) + 1000,
         messages=[
             {
@@ -405,7 +413,7 @@ def extract_metadata(paper_text: str) -> dict:
     truncated = " ".join(paper_text.split()[:3000])
     try:
         message = client.messages.create(
-            model="claude-haiku-4-5-20251001",
+            model=FAST_MODEL,
             max_tokens=300,
             messages=[
                 {
@@ -428,7 +436,7 @@ def generate_summary(paper_text: str, title: str) -> str:
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
     truncated = smart_truncate(paper_text, 8000)
     message = client.messages.create(
-        model="claude-sonnet-5",
+        model=DEFAULT_TEXT_MODEL,
         max_tokens=900,
         messages=[
             {
@@ -453,7 +461,7 @@ def generate_show_notes(paper_text: str, title: str, authors: list = None) -> st
         else:
             byline = f" by {authors[0]} and colleagues"
     message = client.messages.create(
-        model="claude-haiku-4-5-20251001",
+        model=FAST_MODEL,
         max_tokens=300,
         messages=[{
             "role": "user",
@@ -700,7 +708,7 @@ tags:
 
 @app.route("/")
 def index():
-    return render_template("index.html")
+    return render_template("index.html", text_models=TEXT_MODELS, default_model=DEFAULT_TEXT_MODEL)
 
 
 @app.route("/library")
@@ -1097,4 +1105,6 @@ def regenerate_audio(slug):
 
 
 if __name__ == "__main__":
-    app.run(debug=True, port=5050)
+    # Debug mode is off by default: it exposes an interactive debugger, and this
+    # app has no login. Set FLASK_DEBUG=1 in .env for auto-reload while developing.
+    app.run(host="127.0.0.1", port=5050, debug=os.getenv("FLASK_DEBUG") == "1")

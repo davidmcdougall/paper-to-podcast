@@ -39,4 +39,4 @@ The podcast logo is not committed. Drop your own square PNG at `static/logo.png`
 
 ## Working on the code
 
-The main file to edit is `app.py`. Templates are in `templates/`. Test changes by restarting the server (`Ctrl+C` then `python3 app.py`).
+The main file to edit is `app.py`. Templates are in `templates/`. Test changes by restarting the server (`Ctrl+C` then `python3 app.py`), or set `FLASK_DEBUG=1` in `.env` for auto-reload.

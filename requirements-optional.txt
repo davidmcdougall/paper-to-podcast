@@ -1,0 +1,2 @@
+# Only needed for transcribe_episode.py
+openai-whisper

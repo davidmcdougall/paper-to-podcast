@@ -138,14 +138,16 @@ By default, Paper to Podcast uses the first voice in your ElevenLabs account. To
 Two controls on the upload page shape each episode:
 
 - **Length** — **Auto** (the default) lets the model size the episode to the paper: a slight paper gets a short episode, a dense one gets a longer treatment. Or force a preset (Short ~3 min, Standard ~7 min, Long ~15 min, Deep dive ~25 min) or **Custom** with a target in minutes (1–40). Longer targets pull in more of the source text, so this also suits book-length inputs.
-- **Writing model** — pick which Claude model writes the script (Opus for depth, Sonnet for balance, Haiku for speed/cost, Fable for a more creative voice). The default is `claude-sonnet-5`, overridable with `TEXT_MODEL` in `.env`.
+- **Writing model** — set by `TEXT_MODEL` in `.env` (any Claude model ID your Anthropic account can use). To choose a model per episode, list several in `TEXT_MODEL_OPTIONS` (comma-separated) and a dropdown appears on the upload page. `FAST_MODEL` sets the cheaper model used for metadata and show notes. Model names change over time, so nothing is hard-coded beyond the defaults.
 
 ---
 
 ## Notes
 
 - **Text-based PDFs only.** Scanned or image-based PDFs won't work — no OCR. arXiv papers work perfectly.
-- **Cost.** A typical paper costs roughly $0.15–0.50 total across Claude and ElevenLabs. Claude Sonnet does the writing (two passes); Haiku handles cheaper tasks like metadata and show notes.
+- **Cost.** A typical paper costs roughly $0.15–0.50 total across Claude and ElevenLabs. The writing model does two passes; the fast model handles cheaper tasks like metadata and show notes.
+- **Local use only.** The server has no login and binds to `127.0.0.1`. Don't expose port 5050 to a network, and leave `FLASK_DEBUG` unset unless you're developing (debug mode adds an interactive debugger).
+- **Optional: transcribing old episodes.** `transcribe_episode.py` needs Whisper: `pip install -r requirements-optional.txt`.
 - **Episode library.** Browse all episodes at [http://localhost:5050/library](http://localhost:5050/library).
 
 ## Project structure
@@ -163,6 +165,7 @@ paper-to-podcast/
 ├── upload_logo.py              # Utility: upload podcast artwork to R2
 ├── script-prompt-evaluation.md # Notes on the script-generation prompt
 ├── requirements.txt
+├── requirements-optional.txt   # Whisper, for transcribe_episode.py only
 ├── .env.example
 └── LICENSE
 ```

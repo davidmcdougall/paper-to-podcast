@@ -2,11 +2,11 @@
 Transcribe an existing episode MP3 and patch it into episodes.json.
 
 Usage:
-    pip3 install openai-whisper
+    pip3 install -r requirements-optional.txt
     python3 transcribe_episode.py <slug>
 
 Example:
-    python3 transcribe_episode.py castells-urban-renewal-and-social-conflict-in-paris
+    python3 transcribe_episode.py attention-is-all-you-need
 """
 
 import sys
