@@ -2,10 +2,11 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
+  <meta name="csrf-token" content="{{ csrf_token }}">
+  <script src="/static/ui.js" defer></script>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Paper to Podcast</title>
-  <link rel="icon" type="image/png" href="/static/favicon.png">
-  <link rel="shortcut icon" href="/static/favicon.ico">
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -362,7 +363,7 @@
       <input type="number" id="custom-minutes" min="1" max="40" step="1" value="10" style="
         width:90px; padding:8px 10px; background:#0f0f16; border:1px solid #2a2a38;
         border-radius:8px; color:#c8c8e8; font-size:0.8rem; outline:none;" />
-      <span style="font-size:0.72rem; color:#4c4c6e;">1–40 min · longer works for books too</span>
+      <span style="font-size:0.72rem; color:#4c4c6e;">1–40 min · speech character limits apply</span>
     </div>
 
     <!-- Writing model (Claude): dropdown only appears if TEXT_MODEL_OPTIONS lists several -->
@@ -385,18 +386,18 @@
     <div style="margin-top:18px; display:flex; align-items:center; gap:10px;">
       <span style="font-size:0.78rem; color:#6b6b8a; white-space:nowrap;">Voice quality</span>
       <div id="model-toggle" style="display:flex; border:1px solid #2a2a38; border-radius:8px; overflow:hidden; flex:1;">
-        <button type="button" class="model-opt active" data-model="eleven_turbo_v2_5"
+        <button type="button" class="model-opt active" data-model="eleven_flash_v2_5"
           style="flex:1; padding:7px 10px; font-size:0.78rem; border:none; cursor:pointer;
                  background:#1e1e2a; color:#a78bfa; transition:background 0.15s,color 0.15s;">
-          Fast · Turbo
+          Fast · Flash
         </button>
         <button type="button" class="model-opt" data-model="eleven_multilingual_v2"
           style="flex:1; padding:7px 10px; font-size:0.78rem; border:none; cursor:pointer;
                  background:#17171f; color:#6b6b8a; border-left:1px solid #2a2a38; transition:background 0.15s,color 0.15s;">
-          High quality · Multilingual v2 <span style="color:#4c4c6e">(2× credits)</span>
+          High quality · Multilingual v2 <span style="color:#4c4c6e">(about 2× API price)</span>
         </button>
       </div>
-      <input type="hidden" id="tts-model-input" value="eleven_turbo_v2_5" />
+      <input type="hidden" id="tts-model-input" value="eleven_flash_v2_5" />
     </div>
 
     <!-- Script-first toggle -->
@@ -444,7 +445,7 @@
           padding:11px 18px; background:none; border:1px solid #2a2a38;
           color:#6b6b8a; font-size:0.85rem; border-radius:10px;
           cursor:pointer; transition:color 0.2s,border-color 0.2s;">
-          Regenerate script
+          Generate another draft
         </button>
         <span id="preview-meta" style="font-size:0.78rem; color:#4c4c6e; margin-left:auto;"></span>
       </div>
@@ -477,12 +478,13 @@
       </div>
       <div class="step" id="step-save">
         <div class="step-icon pending" id="icon-save">5</div>
-        <span>Saving to Obsidian vault</span>
+        <span>Saving episode (optional publishing / Obsidian)</span>
       </div>
     </div>
 
     <!-- Error -->
     <div id="error-box"></div>
+    <p id="warnings" role="status" style="white-space:pre-line;color:#d8b16a;margin-top:12px"></p>
 
     <!-- Results -->
     <div id="results">
@@ -508,9 +510,9 @@
   <footer>
     <a href="/library" style="color:#6b6b8a; text-decoration:none;">🎙 Episode library</a>
     <span style="margin: 0 8px; color: #2a2a38;">·</span>
-    Text-based PDFs only · arXiv papers work great
+    Text-based PDFs only · Review generated claims against the paper
     <span style="margin: 0 8px; color: #2a2a38;">·</span>
-    <span title="python3 app.py" style="cursor:help; border-bottom: 1px dashed #3a3a52;">To restart: Ctrl+C → python3 app.py</span>
+    <span title="Use the startup command for your OS in the README" style="cursor:help; border-bottom: 1px dashed #3a3a52;">To restart: Ctrl+C → README startup command</span>
   </footer>
 
   <script>
@@ -537,7 +539,7 @@
     });
 
     // ── Workflow mode toggle ─────────────────────────────────────
-    let scriptFirstMode = false;
+    let scriptFirstMode = true;
     document.getElementById('mode-full').addEventListener('click', () => setMode(false));
     document.getElementById('mode-script').addEventListener('click', () => setMode(true));
 
@@ -576,7 +578,7 @@
 
     async function fetchArxivMeta(val) {
       try {
-        const res  = await fetch(`/arxiv-meta?id=${encodeURIComponent(val)}`);
+        const res  = await apiFetch(`/arxiv-meta?id=${encodeURIComponent(val)}`);
         const data = await res.json();
         const titleField = document.getElementById('custom-title');
         if (data.title && !titleField.value.trim()) {
@@ -688,18 +690,8 @@
       resetBtn.style.display = 'none';
       hideError();
       resetSteps();
-      const durations = { extract: 500, script: 25000, summary: 4000, tts: 15000, save: 500 };
-      let si = 0;
-      function advance() {
-        if (si > 0) setStep(subset[si - 1], 'done');
-        if (si < subset.length) {
-          setStep(subset[si], 'active');
-          const next = subset[si + 1];
-          si++;
-          if (next) setTimeout(advance, durations[next] * 0.3);
-        }
-      }
-      advance();
+      // Only the completed HTTP response confirms completion.
+      subset.forEach(step => setStep(step, 'active'));
     }
 
     generateBtn.addEventListener('click', () => {
@@ -710,8 +702,13 @@
       startProgress(['extract','script','summary','tts','save']);
       let data;
       try {
-        const res = await fetch('/generate', { method: 'POST', body: buildFormData() });
+        const res = await apiFetch('/generate', { method: 'POST', body: buildFormData() });
         data = await res.json();
+        if (!res.ok && data.draft) {
+          showDraft(data.draft);
+          showError(data.error + ' Draft saved. Retry voice below or in the library.');
+          return;
+        }
         if (!res.ok) throw new Error(data.error || 'Server error');
       } catch (err) {
         steps.forEach(s => setStep(s, 'pending'));
@@ -727,7 +724,7 @@
       startProgress(['extract','script','summary']);
       let data;
       try {
-        const res = await fetch('/generate-script', { method: 'POST', body: buildFormData() });
+        const res = await apiFetch('/generate-script', { method: 'POST', body: buildFormData() });
         data = await res.json();
         if (!res.ok) throw new Error(data.error || 'Server error');
       } catch (err) {
@@ -736,18 +733,23 @@
         generateBtn.disabled = false;
         return;
       }
+      showDraft(data);
+    }
+
+    function showDraft(data) {
       ['extract','script','summary'].forEach(s => setStep(s, 'done'));
       progress.style.display = 'none';
       currentSlug = data.slug;
-      document.getElementById('preview-title').textContent  = data.title;
+      document.getElementById('preview-title').textContent = data.title;
       document.getElementById('preview-script').textContent = data.script;
-      const mins = Math.round(data.word_count / 150);
-      document.getElementById('preview-meta').textContent   = `${data.word_count} words · ~${mins} min`;
+      const chars = data.character_count || data.script.length;
+      document.getElementById('preview-meta').textContent = `${data.word_count} words · ${chars.toLocaleString()} characters`;
       document.getElementById('voicing-progress').style.display = 'none';
-      document.getElementById('voice-btn').disabled  = false;
+      document.getElementById('voice-btn').disabled = false;
       document.getElementById('regen-script-btn').disabled = false;
       document.getElementById('script-preview').style.display = 'block';
       generateBtn.disabled = false;
+      showWarnings(data.warnings);
     }
 
     document.getElementById('voice-btn').addEventListener('click', async () => {
@@ -758,7 +760,7 @@
       vBtn.disabled = rBtn.disabled = true;
       vProg.style.display = 'block';
       try {
-        const res  = await fetch(`/regenerate-audio/${currentSlug}`, {
+        const res  = await apiFetch(`/regenerate-audio/${currentSlug}`, {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
           body: JSON.stringify({ tts_model: document.getElementById('tts-model-input').value }),
@@ -766,14 +768,7 @@
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || 'Voicing failed');
         document.getElementById('script-preview').style.display = 'none';
-        showResults({
-          title:     document.getElementById('preview-title').textContent,
-          script:    document.getElementById('preview-script').textContent,
-          summary:   '',
-          audio_url: data.audio_url,
-          word_count: parseInt(document.getElementById('preview-meta').textContent) || 0,
-          obsidian_saved: false,
-        });
+        showResults(data);
       } catch (err) {
         vProg.style.display = 'none';
         showError(err.message);
@@ -789,6 +784,8 @@
     // ── Results ─────────────────────────────────────────────────────
     function showResults(data) {
       results.style.display = 'block';
+      progress.style.display = 'none';
+      showWarnings(data.warnings);
       resetBtn.style.display = 'block';
 
       document.getElementById('result-title').textContent = data.title;
@@ -802,7 +799,8 @@
       addBadge(badges, `${data.word_count} words`);
 
       const mins = Math.round((data.word_count / 150));
-      addBadge(badges, `~${mins} min listen`);
+      addBadge(badges, data.duration ? `${Math.floor(data.duration / 60)}:${String(Math.floor(data.duration % 60)).padStart(2,'0')} actual duration` : `~${mins} min estimate`);
+      if (data.feed_published) addBadge(badges, 'Published', 'green');
 
       if (data.obsidian_saved) {
         addBadge(badges, '✓ Saved to Obsidian', 'green');
@@ -821,7 +819,9 @@
       // Summary toggle
       const summaryContainer = document.getElementById('summary-container');
       if (data.summary) {
-        summaryContainer.innerHTML = markdownToHtml(data.summary);
+        summaryContainer.textContent = data.summary;
+        summaryContainer.style.whiteSpace = 'pre-wrap';
+        document.getElementById('toggle-summary').style.display = '';
         const toggleSummary = document.getElementById('toggle-summary');
         toggleSummary.onclick = () => {
           const open = summaryContainer.style.display === 'block';
@@ -840,18 +840,9 @@
       container.appendChild(b);
     }
 
-    // Minimal Markdown → HTML (headings + paragraphs only)
-    function markdownToHtml(md) {
-      return md
-        .replace(/^### (.+)$/gm, '<h3>$1</h3>')
-        .replace(/^## (.+)$/gm, '<h2>$1</h2>')
-        .replace(/^# (.+)$/gm, '<h2>$1</h2>')
-        .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-        .replace(/\n\n/g, '</p><p>')
-        .replace(/^(?!<h)(.+)$/gm, (m) => m.startsWith('<') ? m : `<p>${m}</p>`);
-    }
-
     // ── Helpers ──────────────────────────────────────────────────────
+    function showWarnings(warnings) { document.getElementById('warnings').textContent = (warnings || []).join('\n'); }
+
     function showError(msg) {
       errorBox.style.display = 'block';
       errorBox.textContent   = `⚠ ${msg}`;
@@ -876,8 +867,13 @@
       results.style.display  = 'none';
       resetBtn.style.display = 'none';
       hideError();
+      showWarnings([]);
+      document.getElementById('toggle-summary').style.display = '';
+      document.getElementById('summary-container').style.display = 'none';
+      document.getElementById('script-container').style.display = 'none';
       resetSteps();
     });
+    setMode(true);
   </script>
 </body>
 </html>

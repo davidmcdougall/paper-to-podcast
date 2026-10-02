@@ -2,10 +2,11 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
+  <meta name="csrf-token" content="{{ csrf_token }}">
+  <script src="/static/ui.js" defer></script>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Episode Library · Paper to Podcast</title>
-  <link rel="icon" type="image/png" href="/static/favicon.png">
-  <link rel="shortcut icon" href="/static/favicon.ico">
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -523,11 +524,16 @@
         <span class="episode-date">{{ ep.date[:10] }}</span>
         <span class="episode-source" title="{{ ep.pdf_name }}">{{ ep.pdf_name }}</span>
         {% if ep.word_count %}<span class="episode-source">{{ ep.word_count }}w</span>{% endif %}
-        {% if ep.duration %}<span class="episode-source">{{ ep.duration // 60 }}:{{ '%02d' % (ep.duration % 60) }}</span>{% endif %}
+        {% if ep.duration %}<span class="episode-source">{{ (ep.duration // 60) | int }}:{{ '%02d' % (ep.duration % 60) }}</span>{% endif %}
       </div>
 
+      {% if ep.delete_pending %}<p class="ep-blurb">Deletion incomplete. Retry Delete to finish cleanup.</p>{% endif %}
       <!-- Audio -->
+      {% if ep.file_size and ep.audio_url %}
       <audio controls src="{{ ep.audio_url }}"></audio>
+      {% else %}<p class="ep-blurb">Draft saved · ready to voice</p>{% endif %}
+      {% if ep.warnings %}<p class="ep-blurb">{{ ep.warnings | join(' · ') }}</p>{% endif %}
+      {% if ep.character_count %}<p class="ep-blurb">{{ ep.character_count }} characters</p>{% endif %}
 
       <!-- Button row -->
       <div class="btn-row">
@@ -540,8 +546,15 @@
         {% if ep.pdf_url %}
         <a class="pdf-link" href="{{ ep.pdf_url }}" target="_blank">PDF ↗</a>
         {% endif %}
+        <select class="voice-model" aria-label="Voice model" style="max-width:100%;background:#17171f;color:#c8c8e8">
+          <option value="eleven_flash_v2_5" {% if ep.tts_model not in ['eleven_multilingual_v2', 'eleven_turbo_v2_5'] %}selected{% endif %}>Flash · 40,000 char limit</option>
+          <option value="eleven_turbo_v2_5" {% if ep.tts_model == 'eleven_turbo_v2_5' %}selected{% endif %}>Turbo (legacy) · 40,000 char limit</option>
+          <option value="eleven_multilingual_v2" {% if ep.tts_model == 'eleven_multilingual_v2' %}selected{% endif %}>Multilingual · 10,000 char limit</option>
+        </select>
         <button class="toggle-btn" onclick="regenAudio('{{ ep.slug }}', this)"
-          title="Re-voice from stored script (no Claude call)">Regen audio</button>
+          title="Re-voice from stored script (no Claude call)">Voice / re-voice</button>
+        {% if r2_enabled and ep.file_size %}<button class="toggle-btn" onclick="publishEpisode('{{ ep.slug }}', this)">Publish / retry</button>{% endif %}
+        {% if r2_enabled and ep.r2_url and not ep.r2_location %}<button class="toggle-btn" onclick="adoptR2('{{ ep.slug }}', this)">Adopt R2 location</button>{% endif %}
         <button class="toggle-btn" style="color:#6b3030; border-color:#3a2020;"
           onclick="deleteEpisode('{{ ep.slug }}', this)">Delete</button>
         <button class="meta-edit-btn" title="Edit authors &amp; topics"
@@ -572,7 +585,7 @@
       <div class="summary-body script-body" style="font-family: Georgia, serif;">{{ ep.script }}</div>
       {% endif %}
       {% if ep.summary %}
-      <div class="summary-body">{{ ep.summary | safe }}</div>
+      <div class="summary-body" style="white-space:pre-wrap">{{ ep.summary }}</div>
       {% endif %}
     </div>
     {% endfor %}
@@ -592,7 +605,7 @@
   <script>
     // ── DATA ────────────────────────────────────────────────
     const cards = [...document.querySelectorAll('.episode-card[data-title]')];
-    const totalCount = cards.length;
+    let totalCount = cards.length;
 
     // ── SORT PERSISTENCE ────────────────────────────────────
     const sortField = document.getElementById('sort-field');
@@ -717,7 +730,7 @@
       const authors = card.querySelector('.meta-authors-input').value.trim();
       const topics  = card.querySelector('.meta-topics-input').value.trim();
 
-      const res = await fetch(`/update-meta/${slug}`, {
+      const res = await apiFetch(`/update-meta/${slug}`, {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({ authors, topics }),
@@ -734,7 +747,12 @@
       authorsEl.textContent = data.authors.join(', ');
 
       const topicsEl = card.querySelector('.ep-topics-display');
-      topicsEl.innerHTML = data.topics.map(t => `<span class="topic-chip">${t}</span>`).join('');
+      topicsEl.replaceChildren(...data.topics.map(t => {
+        const chip = document.createElement('span');
+        chip.className = 'topic-chip'; chip.textContent = t;
+        return chip;
+      }));
+      if (data.warnings?.length) alert(data.warnings.join('\n'));
 
       // Close editor
       cancelMetaEditor(btn);
@@ -756,7 +774,7 @@
       async function commit() {
         const newTitle = input.value.trim();
         if (!newTitle || newTitle === current) { input.replaceWith(span); btn.style.display = ''; return; }
-        const res = await fetch(`/rename/${slug}`, {
+        const res = await apiFetch(`/rename/${slug}`, {
           method: 'POST', headers: {'Content-Type': 'application/json'},
           body: JSON.stringify({ title: newTitle }),
         });
@@ -767,8 +785,7 @@
           const card = titleDiv.closest('.episode-card');
           card.dataset.title = newTitle.toLowerCase();
           card.dataset.sortTitle = newTitle.toLowerCase();
-          const audio = card.querySelector('audio');
-          if (audio) audio.src = `/static/audio/${data.new_slug}.mp3`;
+          if (data.warnings?.length) alert(data.warnings.join('\n'));
           const delBtn = card.querySelector('[onclick^="deleteEpisode"]');
           if (delBtn) delBtn.setAttribute('onclick', `deleteEpisode('${data.new_slug}', this)`);
           const saveBtn = card.querySelector('.meta-save-btn');
@@ -786,38 +803,57 @@
 
     // ── REGENERATE AUDIO ─────────────────────────────────────
     async function regenAudio(slug, btn) {
+      if (!confirm('Voice this stored script? Each successful generation may be billed.')) return;
       const orig = btn.textContent;
-      btn.disabled = true;
-      btn.textContent = 'Voicing…';
+      btn.disabled = true; btn.textContent = 'Voicing…';
       try {
-        const res = await fetch(`/regenerate-audio/${slug}`, { method: 'POST' });
+        const model = btn.closest('.episode-card').querySelector('.voice-model').value;
+        const res = await apiFetch(`/regenerate-audio/${slug}`, {method:'POST',
+          headers:{'Content-Type':'application/json'}, body:JSON.stringify({tts_model:model})});
         const data = await res.json();
-        if (!res.ok) { alert(data.error || 'Regen failed.'); return; }
-        // Swap the audio player src on this card
-        const card = btn.closest('.episode-card');
-        const audio = card.querySelector('audio');
-        if (audio) { audio.src = data.audio_url + '?t=' + Date.now(); audio.load(); }
-        btn.textContent = '✓ Done';
-        setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 2000);
-      } catch (err) {
-        alert('Regen failed: ' + err.message);
-        btn.textContent = orig;
-        btn.disabled = false;
-      }
+        if (!res.ok) throw new Error(data.error || 'Voicing failed.');
+        if (data.warnings?.length) alert(data.warnings.join('\n'));
+        location.reload();
+      } catch (err) { alert(err.message); }
+      finally { btn.textContent = orig; btn.disabled = false; }
+    }
+
+    async function adoptR2(slug, btn) {
+      if (!confirm('Confirm that the configured R2 account and bucket contain this episode’s original audio. The app will verify stored sizes and compare the bucket audio with your local originals. Matching content does not prove historical ownership; confirm this is the bucket you intend to manage.')) return;
+      btn.disabled = true;
+      try {
+        const response = await apiFetch(`/adopt-r2/${slug}`, {method: 'POST'});
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || 'Adoption failed');
+        location.reload();
+      } catch (err) { alert(err.message); }
+      finally { btn.disabled = false; }
+    }
+
+    async function publishEpisode(slug, btn) {
+      btn.disabled = true;
+      try {
+        const res = await apiFetch(`/publish/${slug}`, {method:'POST'});
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Publishing failed.');
+        alert('Feed published. No script or speech generation was repeated.');
+      } catch (err) { alert(err.message); }
+      finally { btn.disabled = false; }
     }
 
     // ── DELETE ────────────────────────────────────────────────
     async function deleteEpisode(slug, btn) {
-      if (!confirm('Delete this episode and its audio file?')) return;
-      const res = await fetch(`/delete/${slug}`, { method: 'POST' });
+      if (!confirm('Delete this episode, all its local audio versions and source PDF, and any published R2 audio? Downloaded copies cannot be recalled.')) return;
+      const res = await apiFetch(`/delete/${slug}`, { method: 'POST' });
       if (res.ok) {
         const card = btn.closest('.episode-card');
         const idx = cards.indexOf(card);
         if (idx > -1) cards.splice(idx, 1);
+        totalCount = cards.length;
         card.remove();
         applyFilter();
       } else {
-        alert('Delete failed.');
+        const data = await res.json(); alert(data.error || 'Delete failed.');
       }
     }
   </script>
