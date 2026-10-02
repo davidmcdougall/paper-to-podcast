@@ -32,7 +32,7 @@ py --version
 
 If missing or too old, install Python from python.org, then reopen the terminal. On Windows, enable the installer's PATH option if offered. If `py` is unavailable but `python --version` is correct, use `python` instead of `py` for the environment creation below.
 
-**2. Download the code.** On GitHub choose Code → Download ZIP, extract it and move `paper-to-podcast-main` to Documents. Adjust these paths to its actual location (Windows Documents may be under OneDrive).
+**2. Download the code.** On GitHub choose Code → Download ZIP, extract it and move `paper-to-podcast-main` to Documents. Windows Extract All may create two nested folders: use the inner folder containing `app.py` and `requirements.txt`. Adjust these paths to its actual location (Windows Documents may be under OneDrive).
 
 Mac:
 ```bash
@@ -97,7 +97,7 @@ Open **http://127.0.0.1:5050** in your browser. Leave the terminal open. To stop
 - **Session expired / CSRF error:** reload the page after restarting the server. Use the same hostname throughout; `localhost` and `127.0.0.1` have separate browser sessions.
 - **Authentication / access error:** check the key, API billing and model/voice permissions. Do not assume that buying a higher voice plan fixes a wrong ID or restricted key.
 - **Rate limit / quota:** check provider usage, billing and status before retrying. Failed/time-out requests can still incur provider usage.
-- **Script too long for speech:** keep the draft, choose Turbo in the preview, or generate a shorter draft. Multilingual v2 permits 10,000 characters; Turbo v2.5 permits 40,000. You can also select the voice model beside Voice / re-voice in the library.
+- **Script too long for speech:** keep the draft, choose Flash in the preview, or generate a shorter draft. Multilingual v2 permits 10,000 characters; Flash v2.5 permits 40,000. You can also select the voice model beside Voice / re-voice in the library.
 - **Another operation is running:** wait. Mutations are serialized to prevent duplicate spending and conflicting writes.
 - **No extracted text:** scanned/image PDFs need external OCR; this app does not provide it. Encrypted PDFs are rejected.
 - **Address already in use:** stop the earlier server in its terminal. Port 5050 may also belong to another application; do not kill an unknown process.
@@ -111,18 +111,18 @@ Presets target 450 / 1,000 / 2,200 / 3,600 spoken words. Auto targets 500–2,50
 
 Input PDFs are limited to 20 MiB, 100 pages and 500,000 extracted characters, with a 30-second extraction timeout. Complex content streams are bounded. These are practical limits, not a sandbox guarantee against every malicious PDF. Long text is sampled for individual passes, and the UI warns when the main script source is sampled. Figures, equations and layout may not extract accurately. **Book support is not promised.**
 
-Prompts are limited to 180,000 characters and a counted token budget of 60,000 including reserved output; lower model limits also apply. Truncated Claude responses are not treated as finished scripts. If the voice-edit pass fails, the completed first-pass script is saved for review, without automatic voicing. Editing is not fact-checking.
+Long paper sources are sampled from beginning, middle and end to fit the character and measured token budgets; sampling is recorded as an episode warning. Prompts are limited to 180,000 characters and a counted token budget of 60,000 including reserved output; lower model limits also apply. Truncated Claude responses are not treated as finished scripts. If the voice-edit pass fails, the completed first-pass script is saved for review, without automatic voicing. Editing is not fact-checking.
 
-Defaults are pinned to `claude-sonnet-5` for writing/summary and `claude-haiku-4-5-20251001` for voice editing, metadata and show notes. Explicit IDs are checked with Anthropic before generation; model IDs and token usage are recorded per episode. Availability, billing and quality are not guaranteed by discovery.
+Defaults discover the newest available **Sonnet** for writing/summary and **Haiku** for editing, metadata and show notes. Set `TEXT_MODEL` and `FAST_MODEL` to explicit IDs to pin behavior/cost. Both models are validated before generation and saved on the episode with usage; discovery cannot guarantee future pricing or quality.
 
-To opt into newest-in-family discovery, set `TEXT_MODEL=auto` and/or `FAST_MODEL=auto`. Discovery follows all API pages, caches successful lists for an hour and failed lookups for 60 seconds, discards stale results, and never switches to a different family when the requested family is absent. Page loading does not contact providers. Default mode never silently upgrades a model.
+Discovery follows every API page, caches successful results for an hour and errors for 60 seconds, and never switches families or reuses stale results after a failed refresh. Page loading does not contact providers. Blank settings mean `auto`. Check [model lifecycle notices](https://platform.claude.com/docs/en/about-claude/model-deprecations) if using pins.
 
 | Variable | Purpose |
 |---|---|
 | `ANTHROPIC_API_KEY` | Required for scripts |
 | `ELEVENLABS_API_KEY` | Required for audio |
 | `ELEVENLABS_VOICE_ID` | Recommended explicit accessible voice |
-| `TEXT_MODEL`, `FAST_MODEL` | Explicit IDs, or `auto` to opt into discovery |
+| `TEXT_MODEL`, `FAST_MODEL` | `auto` (default), or explicit IDs to pin models |
 | `TEXT_MODEL_OPTIONS` | Comma-separated additional writing choices; selection also controls summary |
 | `TEXT_MODEL_FAMILY`, `FAST_MODEL_FAMILY` | Families for `auto` only; defaults Sonnet/Haiku |
 | `PODCAST_TITLE`, `PODCAST_DESCRIPTION`, `PODCAST_AUTHOR` | Public feed identity |
@@ -136,7 +136,7 @@ Pricing checked **2026-10-01**. Check the [ElevenLabs API pricing page](https://
 
 Illustrative audio-only cost, using six characters per word (including spaces):
 
-| Target | Approximate characters | Turbo | Multilingual v2 |
+| Target | Approximate characters | Flash | Multilingual v2 |
 |---|---:|---:|---:|
 | Short: 450 words | 2,700 | $0.11 | $0.22 |
 | Standard: 1,000 words | 6,000 | $0.24 | $0.48 |
@@ -198,3 +198,11 @@ Main code: `app.py`; persistence: `storage.py`; PDF worker: `pdf_text.py`; UI: `
 Original application code is MIT; see [LICENSE](LICENSE). Dependency licenses and optional-tool limitations are documented in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). PyMuPDF and Mutagen have been replaced; the direct core dependencies use permissive licenses; see the notices for transitive licenses, including Certifi’s MPL-2.0.
 
 The simple `static/favicon.svg` was authored for this project under MIT. The older raster favicon assets have been removed from the current tree because their provenance was undocumented; they remain in git history. Supply artwork you have permission to publish. Screenshots contain demonstration paper titles and are not paper reproductions.
+
+## Upgrading an existing library
+
+Back up `static/` and `.env` first. On first read, invalid or duplicate v1 IDs are assigned permanent UUIDs under the library lock. The migration saves `episodes.json.migration.bak`, copies safely located audio/PDF files to the new IDs, and preserves original files plus `legacy_slug`/`legacy_files`. Duplicate v1 entries may already share overwritten media; migration cannot recover lost versions. Missing/unsafe files are left as drafts with a migration warning.
+
+New R2 publications store account, bucket and object keys independently of the public domain. Changing only `R2_PUBLIC_URL` is safe; republish existing episodes to update their feed URLs. For legacy episodes whose old domain differs, verify the configured bucket contains their original audio, then choose **Adopt R2 location** in the library. The app checks those objects exist before recording ownership. Account/bucket mismatches and disabled R2 are rejected before deletion starts. After a remote request has begun, a failure remains marked pending because the server may already have applied it; retry Delete after fixing connectivity.
+
+Obsidian exports use a readable title plus short ID, retain that filename after renaming, and include a title heading and audio link. Flash v2.5 is the default speech model following [ElevenLabs guidance](https://elevenlabs.io/docs/overview/models); existing Turbo episodes remain supported.

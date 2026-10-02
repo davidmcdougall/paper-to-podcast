@@ -2,7 +2,7 @@
 import shutil
 import sys
 from pathlib import Path
-from filelock import FileLock
+from filelock import FileLock, Timeout
 import storage
 
 BASE = Path(__file__).resolve().parent
@@ -36,4 +36,7 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    try:
+        main()
+    except Timeout:
+        raise SystemExit('The app is busy. Wait for the current operation and retry.')

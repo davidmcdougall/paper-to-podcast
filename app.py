@@ -36,7 +36,7 @@ app.config.update(
     MAX_CONTENT_LENGTH=MAX_PDF_BYTES + 64 * 1024,
     MAX_FORM_MEMORY_SIZE=32 * 1024,
     TRUSTED_HOSTS=["localhost", "127.0.0.1", "[::1]"],
-    SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Strict",
+    SESSION_COOKIE_NAME="p2p_session", SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Strict",
 )
 AUDIO_DIR = BASE_DIR / "static/audio"
 PDF_DIR = BASE_DIR / "static/pdfs"
@@ -45,7 +45,7 @@ PDF_DIR.mkdir(parents=True, exist_ok=True)
 EPISODES_FILE = BASE_DIR / "static/episodes.json"
 MAX_INPUT_TOKENS = 60_000
 MAX_PROMPT_CHARS = 180_000
-TTS_LIMITS = {"eleven_turbo_v2_5": 40_000, "eleven_multilingual_v2": 10_000}
+TTS_LIMITS = {"eleven_flash_v2_5": 40_000, "eleven_turbo_v2_5": 40_000, "eleven_multilingual_v2": 10_000}
 
 
 class UserError(Exception):
@@ -168,9 +168,9 @@ if R2_ENABLED and (urlsplit(R2_PUBLIC_URL).scheme != "https" or not urlsplit(R2_
 if R2_CONFIG_ERROR:
     print("WARNING: R2 configuration is incomplete or contains placeholders. Clear all R2 credentials for local use, or complete them before publishing.", file=sys.stderr)
 
-# Pin cost/behavior by default. Discovery is an explicit opt-in, never a cross-family fallback.
-LAST_RESORT_TEXT_MODEL = "claude-sonnet-5"
-LAST_RESORT_FAST_MODEL = "claude-haiku-4-5-20251001"
+# Discover within the configured family; explicit IDs pin cost and behavior.
+DEFAULT_TEXT_MODEL = "auto"
+DEFAULT_FAST_MODEL = "auto"
 TEXT_MODEL_FAMILY = os.getenv("TEXT_MODEL_FAMILY", "").strip().lower() or "sonnet"
 FAST_MODEL_FAMILY = os.getenv("FAST_MODEL_FAMILY", "").strip().lower() or "haiku"
 _MODEL_CACHE = {"until": 0.0, "ids": [], "error": None}
@@ -214,11 +214,11 @@ def _newest_in_family(family):
 
 
 def default_text_model():
-    return os.getenv("TEXT_MODEL", "").strip() or LAST_RESORT_TEXT_MODEL
+    return os.getenv("TEXT_MODEL", "").strip() or DEFAULT_TEXT_MODEL
 
 
 def fast_model():
-    return os.getenv("FAST_MODEL", "").strip() or LAST_RESORT_FAST_MODEL
+    return os.getenv("FAST_MODEL", "").strip() or DEFAULT_FAST_MODEL
 
 
 def text_model_options():
@@ -502,7 +502,27 @@ def extract_text_from_pdf(pdf_bytes):
     return data["text"]
 
 
-def complete_message(model, prompt, max_tokens, usage):
+def sample_characters(text, limit):
+    """Bound source size while retaining beginning, middle and end."""
+    if len(text) <= limit:
+        return text
+    marker = "\n[…]\n"
+    room = max(0, limit - 2*len(marker))
+    head, tail = int(room*.4), int(room*.2)
+    middle = room-head-tail
+    start = max(head, len(text)//2-middle//2)
+    return text[:head]+marker+text[start:start+middle]+marker+(text[-tail:] if tail else '')
+
+
+def complete_message(model, prompt, max_tokens, usage, *, source=None, warnings=None):
+    prefix = prompt
+    original_source = source
+    if source is not None:
+        room = MAX_PROMPT_CHARS - len(prefix)
+        if room < 1000:
+            raise UserError("Instructions leave too little room for the paper.")
+        source = sample_characters(source, room)
+        prompt = prefix + source
     if len(prompt) > MAX_PROMPT_CHARS:
         raise UserError("Paper/prompt is too large. Upload a shorter source.")
     info = _MODEL_INFO.get(model)
@@ -513,6 +533,18 @@ def complete_message(model, prompt, max_tokens, usage):
     with claude_client() as client:
         count = client.messages.count_tokens(model=model, system=system, messages=[{"role": "user", "content": prompt}])
         input_limit = min(MAX_INPUT_TOKENS, getattr(info, 'max_input_tokens', None) or MAX_INPUT_TOKENS)
+        sampled = False
+        for _ in range(12):
+            if count.input_tokens + max_tokens <= input_limit or source is None:
+                break
+            if len(source) < 1000:
+                break
+            source = sample_characters(original_source, max(0, int(len(source)*0.7)))
+            prompt = prefix + source
+            sampled = True
+            count = client.messages.count_tokens(model=model, system=system, messages=[{"role": "user", "content": prompt}])
+        if sampled and warnings is not None:
+            warnings.append('Source sampled to fit the model token budget; review against the full paper.')
         if count.input_tokens + max_tokens > input_limit:
             raise UserError("Prompt exceeds the 60,000 input-token budget. Upload a shorter source.")
         response = client.messages.create(model=model, max_tokens=max_tokens,
@@ -531,14 +563,17 @@ def complete_message(model, prompt, max_tokens, usage):
 def generate_podcast_script(paper_text, notes="", target_words=None, model=None, fast=None, usage=None, warnings=None):
     usage = usage if usage is not None else []
     budget_words = target_words or 2500
-    text = smart_truncate(paper_text, max(12000, budget_words*6))
+    text = paper_text
     if target_words is None:
         length_rule = "500–2500 words, as the substance warrants; never pad to fill time"
     else:
         length_rule = f"{max(150, round(target_words*.85))}–{round(target_words*1.15)} words"
     prompt = PODCAST_PROMPT.replace("700–1000 words", length_rule)
-    draft = complete_message(model, f"{prompt}\n\nUser notes: {notes}\n\nPaper source:\n{text}",
-                             int(budget_words*1.8)+1500, usage)
+    prefix = f"{prompt}\n\nUser notes: {notes}\n\nPaper source:\n"
+    if warnings is not None and len(prefix)+len(text) > MAX_PROMPT_CHARS:
+        warnings.append('The script uses sampled sections of this long source; review against the full paper.')
+    draft = complete_message(model, prefix, int(budget_words*1.8)+1500, usage,
+                             source=text, warnings=warnings)
     try:
         return complete_message(fast, f"{VOICE_PASS_PROMPT}\n\nScript to edit:\n{draft}",
                                 int(budget_words*1.8)+1000, usage)
@@ -552,6 +587,7 @@ def generate_podcast_script(paper_text, notes="", target_words=None, model=None,
 
 def extract_metadata(paper_text, model, usage):
     raw = complete_message(model, METADATA_PROMPT+"\n\nPaper text:\n"+" ".join(paper_text.split()[:3000]), 600, usage)
+    raw = re.sub(r'^```(?:json)?\s*|\s*```$', '', raw.strip(), flags=re.IGNORECASE)
     data = json.loads(raw)
     if not isinstance(data, dict) or any(not isinstance(data.get(k), list) for k in ("authors", "topics")):
         raise ValueError("Invalid metadata schema")
@@ -577,12 +613,12 @@ def get_voice_id(client: ElevenLabs) -> str:
     return voices.voices[0].voice_id
 
 
-def text_to_speech(script, filename, model_id="eleven_turbo_v2_5"):
+def text_to_speech(script, filename, model_id="eleven_flash_v2_5"):
     require_keys("ELEVENLABS_API_KEY")
     if model_id not in TTS_LIMITS:
         raise UserError("Select a supported voice model.")
     if not script.strip() or len(script) > TTS_LIMITS[model_id]:
-        raise UserError(f"Script has {len(script):,} characters; {model_id} allows {TTS_LIMITS[model_id]:,}. Shorten it or select Turbo. Draft preserved.")
+        raise UserError(f"Script has {len(script):,} characters; {model_id} allows {TTS_LIMITS[model_id]:,}. Shorten it or select Flash. Draft preserved.")
     if Path(filename).name != filename or not re.fullmatch(r"[\w-]+\.mp3", filename):
         raise UserError("Invalid audio filename.")
     client = ElevenLabs(api_key=ELEVENLABS_API_KEY, timeout=120)
@@ -703,12 +739,14 @@ def build_rss(episodes):
     return ET.tostring(rss, encoding='utf-8', xml_declaration=True).decode('utf-8')
 
 
-def publish_feed(episodes=None):
+def publish_feed(episodes=None, before_upload=None):
     if not R2_ENABLED:
         raise UserError('Configure R2 before publishing.')
     feed = build_rss(load_episodes() if episodes is None else episodes)
     feed_path = BASE_DIR / 'static/feed.xml'
     storage.atomic_write(feed_path, feed.encode('utf-8'))
+    if before_upload is not None:
+        before_upload()
     upload_to_r2(feed_path, 'feed.xml', content_type='application/rss+xml')
 
 
@@ -719,21 +757,43 @@ def local_audio_path(ep):
     return AUDIO_DIR / name
 
 
+def r2_location():
+    return {'account': R2_ACCOUNT_ID, 'bucket': R2_BUCKET}
+
+
+def remote_audio_keys(ep):
+    location = ep.get('r2_location')
+    if location is not None and location != r2_location():
+        raise UserError('Restore the original R2 account and bucket for this episode.')
+    keys = list(ep.get('remote_keys', []))
+    if ep.get('r2_key'):
+        keys.append(ep['r2_key'])
+    if ep.get('r2_url') and not ep.get('r2_key'):
+        # Legacy records have no account identity: require the original public URL
+        # until the maintainer explicitly adopts the current bucket in the UI.
+        url = urlsplit(ep['r2_url'])
+        if location is None and not ep['r2_url'].startswith(R2_PUBLIC_URL+'/audio/'):
+            raise UserError('Legacy R2 ownership is unknown. Use Adopt R2 location after verifying this account and bucket contain the original audio.')
+        keys.append(url.path.lstrip('/'))
+    if any(not isinstance(key, str) or not re.fullmatch(r'audio/[\w-]*\.mp3', key) for key in keys):
+        raise UserError('Invalid stored R2 object key.')
+    return list(dict.fromkeys(keys))
+
+
 def publish_episode(ep):
     """Retry publishing existing audio without any model/TTS call."""
     if not R2_ENABLED:
         raise UserError('Complete the R2 configuration before publishing.')
     if ep.get('delete_pending'):
         raise UserError('Deletion is pending. Retry Delete to finish cleanup.')
-    if ep.get('r2_url') and not ep['r2_url'].startswith(R2_PUBLIC_URL+'/audio/'):
-        raise UserError('Episode belongs to another R2 location. Restore its original R2 settings before publishing.')
+    old_keys = remote_audio_keys(ep)
     path = local_audio_path(ep)
     if not ep.get('file_size') or not path.exists():
         raise UserError('Voice this draft before publishing.')
     key = 'audio/'+path.name
-    keys = list(dict.fromkeys(ep.get('remote_keys', [])+[key]))
+    keys = list(dict.fromkeys(old_keys+[key]))
     # Write intent before remote upload so even a later local failure has a cleanup key.
-    ep = storage.update(EPISODES_FILE, ep['slug'], {'remote_keys': keys})
+    ep = storage.update(EPISODES_FILE, ep['slug'], {'remote_keys': keys, 'r2_key': key, 'r2_location': r2_location()})
     url = upload_to_r2(path, key)
     published = {'r2_url': url, 'file_size': ep['file_size'], 'duration': ep.get('duration', 0)}
     # Save uploaded assets before publishing so a failed feed update can be retried or deleted.
@@ -755,8 +815,19 @@ def save_to_obsidian(ep):
         'audio_url': ep.get('r2_url') or ep.get('audio_url', '')}
     # JSON-quoted scalar/list values are also valid YAML and cannot break frontmatter.
     frontmatter = '\n'.join(k+': '+json.dumps(v, ensure_ascii=False) for k,v in metadata.items())
-    content = '---\n'+frontmatter+'\n---\n\n'+ep.get('summary', '')+'\n'
-    storage.atomic_write(vault/(ep['slug']+'.md'), content.encode('utf-8'))
+    title = ' '.join(ep['title'].split())
+    safe_title = re.sub(r'[^\w -]', '', title).strip(' .')[:80] or 'Episode'
+    filename = ep.get('obsidian_file') or safe_title+'-'+ep['slug'][:8]+'.md'
+    if Path(filename).name != filename or '\\' in filename or not filename.endswith('.md'):
+        raise UserError('Invalid stored Obsidian filename.')
+    # Persist the chosen name so title edits keep updating the same note.
+    storage.update(EPISODES_FILE, ep['slug'], {'obsidian_file': filename})
+    audio = metadata['audio_url']
+    if audio.startswith('/static/'):
+        audio = 'http://127.0.0.1:5050'+audio
+    link = ('[Listen to episode](<'+audio.replace('>', '%3E').replace('<', '%3C').replace('\n', '')+'>)\n\n') if audio else ''
+    content = '---\n'+frontmatter+'\n---\n\n# '+title+'\n\n'+link+ep.get('summary', '')+'\n'
+    storage.atomic_write(vault/filename, content.encode('utf-8'))
     return True
 
 
@@ -856,7 +927,7 @@ def _prepare_episode(req):
     arxiv_id = bounded_field(req.form, 'arxiv_id', 200)
     title = bounded_field(req.form, 'custom_title', 300)
     notes = bounded_field(req.form, 'notes', 4000)
-    model = bounded_field(req.form, 'tts_model', 100, 'eleven_turbo_v2_5')
+    model = bounded_field(req.form, 'tts_model', 100, 'eleven_flash_v2_5')
     if model not in TTS_LIMITS:
         raise UserError('Select a supported voice model.')
     target = resolve_target_words(req.form)
@@ -885,8 +956,6 @@ def _prepare_episode(req):
             warnings.append('arXiv title lookup failed; using the ID. Rename the title in the library.')
     title = title or Path(pdf_name).stem or 'Untitled paper'
     writing, fast = resolve_models(req.form)
-    if len(paper_text.split()) > max(12000, (target or 2500)*6):
-        warnings.append('The script uses sampled sections of this long source; review against the full paper.')
     try:
         script = generate_podcast_script(paper_text, notes, target, writing, fast, usage, warnings)
     except UserError:
@@ -961,7 +1030,7 @@ def regenerate_audio(slug):
     data = request.get_json(silent=True) or {}
     if not isinstance(data, dict):
         raise UserError('Expected a JSON object.')
-    model = bounded_field(data, 'tts_model', 100, ep.get('tts_model','eleven_turbo_v2_5'))
+    model = bounded_field(data, 'tts_model', 100, ep.get('tts_model','eleven_flash_v2_5'))
     try:
         return jsonify(voice_episode(ep, model))
     except (UserError, storage.StoreError):
@@ -1018,32 +1087,55 @@ def retry_publish(slug):
         raise UserError('Publishing failed; local audio is safe. Check R2 configuration and retry.', 502)
 
 
+@app.route('/adopt-r2/<slug>', methods=['POST'])
+@exclusive_mutation
+def adopt_r2(slug):
+    ep = find_episode(slug)
+    if not R2_ENABLED or ep.get('r2_location') or not ep.get('r2_url'):
+        raise UserError('Only legacy published episodes can adopt a configured R2 location.')
+    candidate = dict(ep, r2_location=r2_location())
+    keys = remote_audio_keys(candidate)
+    # Explicit user assertion plus existence checks; public hostname is not ownership.
+    for key in keys:
+        get_r2_client().head_object(Bucket=R2_BUCKET, Key=key)
+    storage.update(EPISODES_FILE, slug, {'r2_location': r2_location(), 'remote_keys': keys,
+                                     'r2_key': urlsplit(ep['r2_url']).path.lstrip('/')})
+    return jsonify(ok=True)
+
+
 @app.route('/delete/<slug>', methods=['POST'])
 @exclusive_mutation
 def delete_episode(slug):
     ep = find_episode(slug)
-    # A durable deletion intent makes partial cleanup visible and retryable.
-    ep = storage.update(EPISODES_FILE, slug, {'delete_pending': True})
-    if ep.get('r2_url') or ep.get('remote_keys') or ep.get('published'):
+    # Validate before recording intent. Configuration errors must leave a usable episode.
+    keys = []
+    remote = ep.get('r2_url') or ep.get('remote_keys') or ep.get('published')
+    if remote:
         if not R2_ENABLED:
             raise UserError('This episode was published. Restore its R2 configuration to delete remote audio and update the feed.')
+        keys = remote_audio_keys(ep)
+        shared = set()
+        for other in load_episodes():
+            if other['slug'] == slug:
+                continue
+            shared.update(other.get('remote_keys', []))
+            if other.get('r2_key'):
+                shared.add(other['r2_key'])
+            if other.get('r2_url'):
+                shared.add(urlsplit(other['r2_url']).path.lstrip('/'))
+        keys = [key for key in keys if key not in shared]
+    if remote:
         try:
-            keys = list(ep.get('remote_keys', []))
-            if ep.get('r2_url'):
-                prefix = R2_PUBLIC_URL+'/audio/'
-                if not ep['r2_url'].startswith(prefix):
-                    raise UserError('Published URL belongs to a different R2 location; restore the original configuration.')
-                keys.append('audio/'+ep['r2_url'][len(prefix):])
-            for key in set(keys):
-                if not re.fullmatch(r'audio/[\w-]+\.mp3', key):
-                    raise UserError('Invalid stored R2 object key.')
             # Validate all targets before the first remote mutation.
-            publish_feed([e for e in load_episodes() if e['slug'] != slug])
+            publish_feed([e for e in load_episodes() if e['slug'] != slug],
+                         before_upload=lambda: storage.update(EPISODES_FILE, slug, {'delete_pending': True}))
             for key in set(keys):
                 get_r2_client().delete_object(Bucket=R2_BUCKET, Key=key)
         except Exception as exc:
             app.logger.exception('Remote deletion incomplete')
             raise UserError('Remote deletion incomplete. Local episode retained; restore/check R2 settings and retry.', 502) from exc
+    if not remote:
+        storage.update(EPISODES_FILE, slug, {'delete_pending': True})
     # Strict patterns, not an untrusted glob, keep legacy and versioned files bounded.
     for path in AUDIO_DIR.iterdir():
         if path.name == slug+'.mp3' or re.fullmatch(re.escape(slug)+r'-[0-9a-f]{32}\.mp3', path.name):

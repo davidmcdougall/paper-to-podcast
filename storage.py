@@ -3,6 +3,9 @@ import json
 import os
 import re
 import tempfile
+import time
+import uuid
+import shutil
 from pathlib import Path
 from filelock import FileLock
 
@@ -28,29 +31,89 @@ def atomic_write(path, data):
             stream.write(data)
             stream.flush()
             os.fsync(stream.fileno())
-        os.replace(name, path)
+        # Windows can briefly deny replacement while a reader has the file open.
+        for attempt in range(6):
+            try:
+                os.replace(name, path)
+                break
+            except PermissionError:
+                if attempt == 5:
+                    raise
+                time.sleep(0.02 * (attempt + 1))
     finally:
         Path(name).unlink(missing_ok=True)
 
 
-def load(path):
+def _load_unlocked(path):
     try:
         data = json.loads(Path(path).read_text(encoding='utf-8'))
     except FileNotFoundError:
         return []
     except (ValueError, OSError) as exc:
         raise StoreError('Cannot read episode library; restore a backup or repair it. Original file preserved.') from exc
-    if (not isinstance(data, list) or any(not isinstance(ep, dict) or not valid_id(ep.get('slug')) for ep in data)
-            or len({ep['slug'] for ep in data}) != len(data)):
-        raise StoreError('Invalid or duplicate episode IDs; library preserved for repair.')
+    if not isinstance(data, list) or any(not isinstance(ep, dict) or not isinstance(ep.get('slug'), str) for ep in data):
+        raise StoreError('Invalid episode records; library preserved for repair.')
+    seen = set()
+    changed = False
+    for ep in data:
+        old = ep['slug']
+        if valid_id(old) and old not in seen:
+            seen.add(old)
+            continue
+        # v1 allowed empty/reserved/duplicate slugs. Copy assets, never move them:
+        # duplicate entries can share a file and the original remains recoverable.
+        new = uuid.uuid4().hex
+        while new in seen or any(e['slug'] == new for e in data):
+            new = uuid.uuid4().hex
+        ep.update(slug=new, legacy_slug=old)
+        ep['legacy_files'] = {field: ep.get(field) for field in ('audio_url', 'pdf_url', 'local_audio')}
+        warnings = list(ep.get('warnings', []))
+        warnings.append('Legacy episode ID migrated. Original files retained; review this episode before publishing.')
+        ep['warnings'] = warnings
+        for folder, ext, field in [('audio', '.mp3', 'audio_url'), ('pdfs', '.pdf', 'pdf_url')]:
+            name = (ep.get('local_audio') if folder == 'audio' else None) or old+ext
+            # Only v1 basename characters, never paths or Windows devices.
+            safe = re.fullmatch(r'[\w-]*'+re.escape(ext), name) is not None
+            safe = safe and len(name.encode('utf-8')) <= 240
+            safe = safe and (os.name != 'nt' or valid_id(Path(name).stem))
+            source = Path(path).parent/folder/name
+            target = Path(path).parent/folder/(new+ext)
+            if safe and source.is_file() and not source.is_symlink():
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(source, target)
+                ep[field] = '/static/'+folder+'/'+target.name
+                if folder == 'audio':
+                    ep['local_audio'] = target.name
+            else:
+                ep[field] = ''
+                if folder == 'audio':
+                    if ep.get('r2_url') and ep.get('file_size') and not ep.get('published'):
+                        ep['published'] = {k: ep.get(k) for k in ('r2_url', 'file_size', 'duration')}
+                    ep.pop('local_audio', None)
+                    ep.update(file_size=0, audio_ready=False)
+        seen.add(new)
+        changed = True
+    if changed:
+        path = Path(path)
+        backup = path.with_suffix('.json.migration.bak')
+        if not backup.exists():
+            atomic_write(backup, path.read_bytes())
+        atomic_write(path, json.dumps(data, indent=2, ensure_ascii=False).encode('utf-8'))
     return data
+
+
+def load(path):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with FileLock(str(path)+'.lock', timeout=10):
+        return _load_unlocked(path)
 
 
 def mutate(path, callback):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with FileLock(str(path)+'.lock', timeout=10):
-        data = load(path)
+        data = _load_unlocked(path)
         result = callback(data)
         encoded = json.dumps(data, indent=2, ensure_ascii=False).encode('utf-8')
         if path.exists():

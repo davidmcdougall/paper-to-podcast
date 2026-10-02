@@ -13,7 +13,7 @@ import app as application
 def appmod(tmp_path, monkeypatch):
     a = application
     monkeypatch.setattr(a, 'AUDIO_DIR', tmp_path/'audio'); a.AUDIO_DIR.mkdir()
-    monkeypatch.setattr(a, 'PDF_DIR', tmp_path/'pdf'); a.PDF_DIR.mkdir()
+    monkeypatch.setattr(a, 'PDF_DIR', tmp_path/'pdfs'); a.PDF_DIR.mkdir()
     monkeypatch.setattr(a, 'EPISODES_FILE', tmp_path/'episodes.json')
     monkeypatch.setattr(a, 'BASE_DIR', Path(a.__file__).resolve().parent)
     monkeypatch.setattr(a, 'ANTHROPIC_API_KEY', 'test-anthropic-key')
@@ -22,6 +22,7 @@ def appmod(tmp_path, monkeypatch):
     monkeypatch.setattr(a, 'get_voice_id', lambda client: 'test-voice')
     monkeypatch.setattr(a, 'R2_ENABLED', False)
     monkeypatch.setattr(a, 'R2_CONFIG_ERROR', False)
+    monkeypatch.setattr(a, '_MODEL_INFO', {})
     monkeypatch.setattr(a, '_MODEL_CACHE', {'until':0, 'ids':[], 'error':None})
     for key in ['TEXT_MODEL','FAST_MODEL','TEXT_MODEL_OPTIONS']:
         monkeypatch.delenv(key, raising=False)

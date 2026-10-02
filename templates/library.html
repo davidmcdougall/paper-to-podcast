@@ -547,12 +547,14 @@
         <a class="pdf-link" href="{{ ep.pdf_url }}" target="_blank">PDF ↗</a>
         {% endif %}
         <select class="voice-model" aria-label="Voice model" style="max-width:100%;background:#17171f;color:#c8c8e8">
-          <option value="eleven_turbo_v2_5" {% if ep.tts_model != 'eleven_multilingual_v2' %}selected{% endif %}>Turbo · 40,000 char limit</option>
+          <option value="eleven_flash_v2_5" {% if ep.tts_model not in ['eleven_multilingual_v2', 'eleven_turbo_v2_5'] %}selected{% endif %}>Flash · 40,000 char limit</option>
+          <option value="eleven_turbo_v2_5" {% if ep.tts_model == 'eleven_turbo_v2_5' %}selected{% endif %}>Turbo (legacy) · 40,000 char limit</option>
           <option value="eleven_multilingual_v2" {% if ep.tts_model == 'eleven_multilingual_v2' %}selected{% endif %}>Multilingual · 10,000 char limit</option>
         </select>
         <button class="toggle-btn" onclick="regenAudio('{{ ep.slug }}', this)"
           title="Re-voice from stored script (no Claude call)">Voice / re-voice</button>
         {% if r2_enabled and ep.file_size %}<button class="toggle-btn" onclick="publishEpisode('{{ ep.slug }}', this)">Publish / retry</button>{% endif %}
+        {% if r2_enabled and ep.r2_url and not ep.r2_location %}<button class="toggle-btn" onclick="adoptR2('{{ ep.slug }}', this)">Adopt R2 location</button>{% endif %}
         <button class="toggle-btn" style="color:#6b3030; border-color:#3a2020;"
           onclick="deleteEpisode('{{ ep.slug }}', this)">Delete</button>
         <button class="meta-edit-btn" title="Edit authors &amp; topics"
@@ -814,6 +816,18 @@
         location.reload();
       } catch (err) { alert(err.message); }
       finally { btn.textContent = orig; btn.disabled = false; }
+    }
+
+    async function adoptR2(slug, btn) {
+      if (!confirm('Confirm that the configured R2 account and bucket contain this episode’s original audio. This links its remote objects to that location, even if the public domain has changed.')) return;
+      btn.disabled = true;
+      try {
+        const response = await apiFetch(`/adopt-r2/${slug}`, {method: 'POST'});
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || 'Adoption failed');
+        location.reload();
+      } catch (err) { alert(err.message); }
+      finally { btn.disabled = false; }
     }
 
     async function publishEpisode(slug, btn) {

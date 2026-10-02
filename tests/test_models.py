@@ -65,7 +65,7 @@ def test_override_validation_failure(appmod,monkeypatch):
 
 def test_voice_pass_failure_retains_first_draft(appmod,monkeypatch):
     calls=[]
-    def complete(*args):
+    def complete(*args, **kwargs):
         calls.append(1)
         if len(calls)==2:raise RuntimeError('offline')
         return 'Complete first-pass script'
