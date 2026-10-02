@@ -3,6 +3,7 @@ import re
 import sys
 import time
 import json
+import hashlib
 import datetime
 import urllib.request
 import xml.etree.ElementTree as ET
@@ -484,7 +485,7 @@ def smart_truncate(text: str, max_words: int) -> str:
         + ["[…]"]
         + words[mid_start:mid_end]
         + ["[…]"]
-        + words[-tail:]
+        + (words[-tail:] if tail else [])
     )
 
 
@@ -514,14 +515,25 @@ def sample_characters(text, limit):
     return text[:head]+marker+text[start:start+middle]+marker+(text[-tail:] if tail else '')
 
 
-def complete_message(model, prompt, max_tokens, usage, *, source=None, warnings=None):
+def sample_source(text, word_limit, char_limit):
+    """Apply the cost cap and size budget against the original source each time."""
+    limit = word_limit or len(text.split())
+    sampled = smart_truncate(text, limit)
+    while len(sampled) > char_limit and limit > 3:
+        limit = max(3, min(limit-1, int(limit*char_limit/len(sampled)*0.95)))
+        sampled = smart_truncate(text, limit)
+    # A few exceptionally long tokens may themselves exceed the character budget.
+    return sample_characters(sampled, char_limit)
+
+
+def complete_message(model, prompt, max_tokens, usage, *, source=None, warnings=None, source_word_limit=None):
     prefix = prompt
     original_source = source
     if source is not None:
         room = MAX_PROMPT_CHARS - len(prefix)
         if room < 1000:
             raise UserError("Instructions leave too little room for the paper.")
-        source = sample_characters(source, room)
+        source = sample_source(original_source, source_word_limit, room)
         prompt = prefix + source
     if len(prompt) > MAX_PROMPT_CHARS:
         raise UserError("Paper/prompt is too large. Upload a shorter source.")
@@ -533,18 +545,18 @@ def complete_message(model, prompt, max_tokens, usage, *, source=None, warnings=
     with claude_client() as client:
         count = client.messages.count_tokens(model=model, system=system, messages=[{"role": "user", "content": prompt}])
         input_limit = min(MAX_INPUT_TOKENS, getattr(info, 'max_input_tokens', None) or MAX_INPUT_TOKENS)
-        sampled = False
+        sampled = source is not None and source != original_source
         for _ in range(12):
             if count.input_tokens + max_tokens <= input_limit or source is None:
                 break
             if len(source) < 1000:
                 break
-            source = sample_characters(original_source, max(0, int(len(source)*0.7)))
+            source = sample_source(original_source, source_word_limit, max(0, int(len(source)*0.7)))
             prompt = prefix + source
             sampled = True
             count = client.messages.count_tokens(model=model, system=system, messages=[{"role": "user", "content": prompt}])
         if sampled and warnings is not None:
-            warnings.append('Source sampled to fit the model token budget; review against the full paper.')
+            warnings.append('Source sampled to fit the source-cost and model budgets; review against the full paper.')
         if count.input_tokens + max_tokens > input_limit:
             raise UserError("Prompt exceeds the 60,000 input-token budget. Upload a shorter source.")
         response = client.messages.create(model=model, max_tokens=max_tokens,
@@ -570,10 +582,8 @@ def generate_podcast_script(paper_text, notes="", target_words=None, model=None,
         length_rule = f"{max(150, round(target_words*.85))}–{round(target_words*1.15)} words"
     prompt = PODCAST_PROMPT.replace("700–1000 words", length_rule)
     prefix = f"{prompt}\n\nUser notes: {notes}\n\nPaper source:\n"
-    if warnings is not None and len(prefix)+len(text) > MAX_PROMPT_CHARS:
-        warnings.append('The script uses sampled sections of this long source; review against the full paper.')
     draft = complete_message(model, prefix, int(budget_words*1.8)+1500, usage,
-                             source=text, warnings=warnings)
+                             source=text, warnings=warnings, source_word_limit=max(12000, budget_words*6))
     try:
         return complete_message(fast, f"{VOICE_PASS_PROMPT}\n\nScript to edit:\n{draft}",
                                 int(budget_words*1.8)+1000, usage)
@@ -731,7 +741,7 @@ def build_rss(episodes):
         except (KeyError, ValueError):
             dt = datetime.datetime.now(datetime.timezone.utc)
         node(item, 'pubDate', format_datetime(dt.astimezone(datetime.timezone.utc)))
-        guid = node(item, 'guid', ep['slug'])
+        guid = node(item, 'guid', ep.get('feed_guid') or ep['slug'])
         guid.set('isPermaLink', 'false')
         ET.SubElement(item, 'enclosure', url=url, length=str(published['file_size']), type='audio/mpeg')
         if published.get('duration'):
@@ -817,9 +827,16 @@ def save_to_obsidian(ep):
     frontmatter = '\n'.join(k+': '+json.dumps(v, ensure_ascii=False) for k,v in metadata.items())
     title = ' '.join(ep['title'].split())
     safe_title = re.sub(r'[^\w -]', '', title).strip(' .')[:80] or 'Episode'
-    filename = ep.get('obsidian_file') or safe_title+'-'+ep['slug'][:8]+'.md'
+    # The full permanent ID avoids both UUID-prefix and legacy-title-prefix collisions.
+    suffix = '-'+ep['slug']+'.md'
+    safe_title = safe_title.encode('utf-8')[:max(1, 240-len(suffix.encode('utf-8')))].decode('utf-8', errors='ignore') or 'Note'
+    filename = ep.get('obsidian_file') or safe_title+suffix
     if Path(filename).name != filename or '\\' in filename or not filename.endswith('.md'):
         raise UserError('Invalid stored Obsidian filename.')
+    if any(other['slug'] != ep['slug'] and other.get('obsidian_file') == filename for other in load_episodes()):
+        raise UserError('This Obsidian filename belongs to another episode; original note preserved.')
+    if not ep.get('obsidian_file') and (vault/filename).exists():
+        raise UserError('An untracked Obsidian note already has this filename; original note preserved.')
     # Persist the chosen name so title edits keep updating the same note.
     storage.update(EPISODES_FILE, ep['slug'], {'obsidian_file': filename})
     audio = metadata['audio_url']
@@ -1095,9 +1112,48 @@ def adopt_r2(slug):
         raise UserError('Only legacy published episodes can adopt a configured R2 location.')
     candidate = dict(ep, r2_location=r2_location())
     keys = remote_audio_keys(candidate)
-    # Explicit user assertion plus existence checks; public hostname is not ownership.
+    # Validate authenticated bucket contents against local originals, not arbitrary
+    # public URLs. Equal size alone is not evidence of equal audio.
+    published_key = urlsplit(ep['r2_url']).path.lstrip('/')
+    published_size = (ep.get('published') or ep).get('file_size')
+    client = get_r2_client()
     for key in keys:
-        get_r2_client().head_object(Bucket=R2_BUCKET, Key=key)
+        if key == published_key:
+            path = local_audio_path(ep)
+            expected_size = published_size
+        else:
+            name = key.removeprefix('audio/')
+            if not storage.valid_id(Path(name).stem):
+                raise UserError('Restore the original local audio before adopting this episode.')
+            path = AUDIO_DIR/name
+            expected_size = path.stat().st_size if path.is_file() else None
+        if (not expected_size or not path.is_file() or path.is_symlink()
+                or path.stat().st_size != expected_size):
+            raise UserError('Restore the matching original local audio before adopting this episode.')
+        head = client.head_object(Bucket=R2_BUCKET, Key=key)
+        if head.get('ContentLength') != expected_size:
+            raise UserError('R2 audio size does not match this episode. Adoption refused.')
+        local_hash = hashlib.sha256()
+        with path.open('rb') as stream:
+            for chunk in iter(lambda: stream.read(1024*1024), b''):
+                local_hash.update(chunk)
+        response = client.get_object(Bucket=R2_BUCKET, Key=key)
+        body = response['Body']
+        remote_hash = hashlib.sha256()
+        remaining = expected_size
+        try:
+            if response.get('ContentLength') != expected_size:
+                raise UserError('R2 audio changed during verification. Adoption refused.')
+            while remaining:
+                chunk = body.read(min(1024*1024, remaining))
+                if not chunk:
+                    raise UserError('R2 audio was incomplete. Adoption refused.')
+                remote_hash.update(chunk)
+                remaining -= len(chunk)
+            if body.read(1) or local_hash.digest() != remote_hash.digest():
+                raise UserError('R2 audio content does not match this episode. Adoption refused.')
+        finally:
+            body.close()
     storage.update(EPISODES_FILE, slug, {'r2_location': r2_location(), 'remote_keys': keys,
                                      'r2_key': urlsplit(ep['r2_url']).path.lstrip('/')})
     return jsonify(ok=True)

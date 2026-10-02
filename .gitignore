@@ -37,3 +37,5 @@ static/episodes.json.bak
 .coverage
 
 static/episodes.json.migration.bak
+
+static/episodes.json.migration.*.bak

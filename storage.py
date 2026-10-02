@@ -6,6 +6,8 @@ import tempfile
 import time
 import uuid
 import shutil
+import datetime
+from collections import Counter
 from pathlib import Path
 from filelock import FileLock
 
@@ -53,6 +55,8 @@ def _load_unlocked(path):
         raise StoreError('Cannot read episode library; restore a backup or repair it. Original file preserved.') from exc
     if not isinstance(data, list) or any(not isinstance(ep, dict) or not isinstance(ep.get('slug'), str) for ep in data):
         raise StoreError('Invalid episode records; library preserved for repair.')
+    original_ids = Counter(ep['slug'] for ep in data)
+    original_guids = Counter(ep.get('feed_guid') or ep['slug'] for ep in data)
     seen = set()
     changed = False
     for ep in data:
@@ -66,6 +70,7 @@ def _load_unlocked(path):
         while new in seen or any(e['slug'] == new for e in data):
             new = uuid.uuid4().hex
         ep.update(slug=new, legacy_slug=old)
+        ep['feed_guid'] = old if old and original_ids[old] == 1 and original_guids[old] == 1 else new
         ep['legacy_files'] = {field: ep.get(field) for field in ('audio_url', 'pdf_url', 'local_audio')}
         warnings = list(ep.get('warnings', []))
         warnings.append('Legacy episode ID migrated. Original files retained; review this episode before publishing.')
@@ -78,9 +83,20 @@ def _load_unlocked(path):
             safe = safe and (os.name != 'nt' or valid_id(Path(name).stem))
             source = Path(path).parent/folder/name
             target = Path(path).parent/folder/(new+ext)
-            if safe and source.is_file() and not source.is_symlink():
-                target.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copyfile(source, target)
+            copied = False
+            try:
+                if safe and source.is_file() and not source.is_symlink():
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(source, target)
+                    copied = True
+            except OSError:
+                # One locked/unreadable asset must not prevent the library opening.
+                try:
+                    target.unlink(missing_ok=True)
+                except OSError:
+                    pass  # Any orphan is unreferenced; original media is untouched.
+                warnings.append('Legacy '+folder+' copy failed; original retained. Restore it before reusing this asset.')
+            if copied:
                 ep[field] = '/static/'+folder+'/'+target.name
                 if folder == 'audio':
                     ep['local_audio'] = target.name
@@ -96,8 +112,11 @@ def _load_unlocked(path):
     if changed:
         path = Path(path)
         backup = path.with_suffix('.json.migration.bak')
+        before = path.read_bytes()
+        timestamp = datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
+        atomic_write(path.with_name(path.name+'.migration.'+timestamp+'-'+uuid.uuid4().hex[:8]+'.bak'), before)
         if not backup.exists():
-            atomic_write(backup, path.read_bytes())
+            atomic_write(backup, before)
         atomic_write(path, json.dumps(data, indent=2, ensure_ascii=False).encode('utf-8'))
     return data
 

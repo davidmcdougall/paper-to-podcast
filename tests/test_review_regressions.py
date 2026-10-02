@@ -123,12 +123,18 @@ def test_r2_preflight_failure_does_not_mark_pending(appmod,client,episode,monkey
 
 def test_legacy_r2_adoption_requires_object_presence(appmod,client,episode,monkeypatch):
     monkeypatch.setattr(appmod,'R2_ENABLED',True)
-    storage.update(appmod.EPISODES_FILE,'test-id',{'r2_url':'https://old.test/audio/test-id.mp3'})
+    storage.update(appmod.EPISODES_FILE,'test-id',{'r2_url':'https://old.test/audio/test-id.mp3','file_size':5})
+    (appmod.AUDIO_DIR/'test-id.mp3').write_bytes(b'audio')
     monkeypatch.setattr(appmod,'get_r2_client',lambda:N(head_object=lambda **kw:(_ for _ in ()).throw(RuntimeError('missing'))))
     assert client.post('/adopt-r2/test-id').status_code==500
     assert not appmod.find_episode('test-id').get('r2_location')
+    import io
     seen=[]
-    monkeypatch.setattr(appmod,'get_r2_client',lambda:N(head_object=lambda **kw:seen.append(kw)))
+    def head(**kw):
+        seen.append(kw)
+        return {'ContentLength':5}
+    monkeypatch.setattr(appmod,'get_r2_client',lambda:N(head_object=head,
+        get_object=lambda **kw:{'ContentLength':5,'Body':io.BytesIO(b'audio')}))
     assert client.post('/adopt-r2/test-id').status_code==200
     assert seen[0]['Key']=='audio/test-id.mp3'
     assert appmod.find_episode('test-id')['r2_location']==appmod.r2_location()
