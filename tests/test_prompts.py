@@ -73,7 +73,8 @@ def test_edit_history_reset_and_upgrade_preserve_bytes(store, tmp_path):
     assert upgraded.historical('metadata', sha) == edited.encode()
 
 
-@pytest.mark.parametrize('damaged', [None, b'{unknown}', b'\xff', b'x'*33000])
+@pytest.mark.parametrize('damaged', [None, b'{unknown}', b'\xff', b'x'*33000],
+                         ids=['missing','unknown-placeholder','invalid-utf8','oversized'])
 def test_missing_invalid_external_edits_warn_without_repair(store, damaged):
     original = store.snapshot()['summary']
     path = store.root/'summary.md'

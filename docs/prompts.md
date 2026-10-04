@@ -2,7 +2,8 @@
 
 Five shipped UTF-8 Markdown templates live in `prompt_templates/`: `script`,
 `voice_edit`, `summary`, `show_notes` and `metadata`. Their rendered requests match
-fixtures captured before extraction. System instructions and metadata schema
+fixtures captured before extraction. Git attributes pin shipped templates to LF
+line endings on every OS, while editable/archive bytes are preserved exactly. System instructions and metadata schema
 validation remain in Python. No dependency was added.
 
 The first mutating operation seeds editable copies in `<user data>/prompts/`.
