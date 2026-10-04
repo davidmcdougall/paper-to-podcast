@@ -78,11 +78,16 @@ class Configuration:
         saved = self.read()
         paths = saved.get('paths', {})
         legacy = self.base / 'static'
+        user_library = data / 'library'
+        if ('library_dir' not in paths and (legacy / 'episodes.json').exists()
+                and (user_library / 'episodes.json').exists() and legacy != user_library):
+            raise ConfigurationError('Two libraries found (static and user data). Set [paths].library_dir in settings.toml to the intended library; neither was changed.')
         existing = ((self.base / '.env').exists() or (legacy / 'episodes.json').exists()
                     or any(p.exists() and any(p.iterdir()) for p in
                            (legacy / 'audio', legacy / 'pdfs')))
         library = (_absolute(paths['library_dir'], 'library_dir') if 'library_dir' in paths
-                   else legacy if existing and not override else data / 'library')
+                   else user_library if (user_library / 'episodes.json').exists()
+                   else legacy if existing and not override else user_library)
         legacy_env = _absolute(paths.get('legacy_env_path', str(self.base / '.env')), 'legacy_env_path')
         if 'library_dir' in paths and not library.is_dir():
             raise ConfigurationError('Registered library is missing; restore its location before starting.')
@@ -139,13 +144,21 @@ class Configuration:
         with self.edit():
             self._save(changes)
 
-    def _save(self, changes):
+    def _save(self, changes, *, register_location=False):
         """Merge validated non-secret settings atomically; UI arrives in PR-F."""
         if self._operation.get() is not None:
             raise ConfigurationError('Wait for the current operation before changing settings.')
         self.file.parent.mkdir(parents=True, exist_ok=True)
         with FileLock(str(self.file) + '.lock', timeout=10):
             data = self.read()
+            if register_location:
+                recorded = data.get('paths', {}).get('library_dir')
+                if recorded:
+                    if Path(recorded).resolve() != self.locations.library:
+                        raise ConfigurationError('Library location changed. Restart the app before continuing.')
+                    return
+                changes = {'paths': {'library_dir': str(self.locations.library),
+                                     'legacy_env_path': str(self.locations.legacy_env)}}
             for name, value in changes.items():
                 if name in ('settings', 'paths') and isinstance(value, dict):
                     data[name] = {**data.get(name, {}), **value}
@@ -220,6 +233,9 @@ class Configuration:
             raise ConfigurationError('Library location changed. Restart the app before continuing.')
 
     def prepare_library(self):
-        # Only the selected library is created; no migration or configuration writes.
-        for folder in ('audio', 'pdfs'):
-            (self.locations.library / folder).mkdir(parents=True, exist_ok=True)
+        # Pin the choice before creating media or accepting requests. Later .env
+        # creation cannot silently redirect this installation to another library.
+        with self.edit():
+            self._save({}, register_location=True)
+            for folder in ('audio', 'pdfs'):
+                (self.locations.library / folder).mkdir(parents=True, exist_ok=True)

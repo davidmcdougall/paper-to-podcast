@@ -28,6 +28,7 @@ from elevenlabs import ElevenLabs
 from elevenlabs.types import VoiceSettings
 from flask import Flask, request, jsonify, render_template, send_from_directory, session, abort
 from configuration import Configuration, ConfigurationError
+from credential_store import KeychainUnavailable
 from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent
 configuration = Configuration(BASE_DIR)
@@ -91,6 +92,15 @@ def security_headers(response):
     return response
 
 
+def log_failure(message, *args):
+    exc = sys.exc_info()[1]
+    kind = type(exc).__name__ if exc is not None else 'UnknownError'
+    status = getattr(exc, 'status_code', None)
+    if type(status) is not int or not 100 <= status <= 599:
+        status = None
+    app.logger.error(message + ' [exception=%s http_status=%s]', *args, kind, status)
+
+
 @app.errorhandler(Exception)
 def handle_error(exc):
     if isinstance(exc, UserError):
@@ -99,7 +109,7 @@ def handle_error(exc):
         return jsonify(error=exc.description), exc.code
     if isinstance(exc, (storage.StoreError, ConfigurationError)):
         return jsonify(error=str(exc)), 500
-    app.logger.error("Request failed")
+    log_failure("Request failed")
     return jsonify(error="Operation failed. Check the library and server log before retrying."), 500
 
 
@@ -122,10 +132,12 @@ def configured(value):
 def require_keys(*names):
     for name in names:
         if not configured(credential(name)):
-            raise UserError(f"Configure {name} before generating.")
+            raise UserError(f"Set {name} in your existing .env (or OS keychain) before generating. Browser settings arrive in a later release.")
 
 
 def provider_error(provider, exc):
+    if isinstance(exc, KeychainUnavailable):
+        return str(exc)
     status = getattr(exc, "status_code", None)
     if status in (401, 403):
         return f"{provider}: check your API key and permission to use this model or voice."
@@ -145,6 +157,8 @@ def r2_state():
         values = [setting('R2_ACCOUNT_ID'), credential('R2_ACCESS_KEY_ID'),
                   credential('R2_SECRET_KEY'), setting('R2_PUBLIC_URL')]
         url = urlsplit(setting('R2_PUBLIC_URL'))
+    except KeychainUnavailable:
+        raise
     except (ConfigurationError, ValueError):
         return False, True
     enabled = all(configured(v) for v in values) and bool(setting('R2_BUCKET').strip())
@@ -583,7 +597,7 @@ def generate_podcast_script(paper_text, notes="", target_words=None, model=None,
     except Exception:
         if warnings is None:
             raise
-        app.logger.error('Voice editing failed; first-pass script preserved')
+        log_failure('Voice editing failed; first-pass script preserved')
         warnings.append('Voice editing failed. First-pass script saved for review; check it before voicing.')
         return draft
 
@@ -850,14 +864,14 @@ def finish_optional(ep):
             ep = publish_episode(ep)
             published = True
         except Exception:
-            app.logger.error('Publishing failed')
+            log_failure('Publishing failed')
             warnings.append('Audio saved locally; publishing failed. Use Publish / retry in the library; no generation charge.')
     elif r2_state()[1]:
         warnings.append('Audio saved locally. R2 configuration is incomplete; clear or complete its settings.')
     try:
         obsidian = save_to_obsidian(ep)
     except Exception:
-        app.logger.error('Obsidian save failed')
+        log_failure('Obsidian save failed')
         warnings.append('Obsidian save failed. Local episode is safe; check the vault path.')
     return dict(ep, warnings=warnings, audio_ready=True, feed_published=published, obsidian_saved=obsidian)
 
@@ -977,7 +991,7 @@ def _prepare_episode(req):
     except UserError:
         raise
     except Exception as exc:
-        app.logger.error('Script generation failed')
+        log_failure('Script generation failed')
         raise UserError(provider_error('Anthropic', exc), 502) from exc
     # Persist the paid script first. Failure of optional passes cannot lose it.
     slug = uuid.uuid4().hex
@@ -1006,7 +1020,7 @@ def _prepare_episode(req):
             if name == 'metadata': ep.update(result)
             else: ep[name.replace(' ', '_')] = result
         except Exception:
-            app.logger.error('%s generation failed', name)
+            log_failure('%s generation failed', name)
             warnings.append(f'{name.capitalize()} failed; script is saved and can still be voiced.')
     ep.update(warnings=warnings, usage=usage)
     return storage.update(EPISODES_FILE, slug, ep)
@@ -1033,7 +1047,7 @@ def generate():
     try:
         return jsonify(voice_episode(ep, ep['tts_model']))
     except Exception as exc:
-        app.logger.error('Voicing failed; draft preserved')
+        log_failure('Voicing failed; draft preserved')
         error = exc.message if isinstance(exc, UserError) else provider_error('ElevenLabs', exc)
         # Return the saved draft for a voice-only retry, never ask to regenerate the script.
         return jsonify(error=error, draft=ep, audio_ready=False), 502
@@ -1053,7 +1067,7 @@ def regenerate_audio(slug):
     except (UserError, storage.StoreError):
         raise
     except Exception as exc:
-        app.logger.error('Voicing failed')
+        log_failure('Voicing failed')
         raise UserError(provider_error('ElevenLabs', exc), 502) from exc
 
 
@@ -1064,7 +1078,7 @@ def refresh_feed_after_edit(ep):
             publish_feed()
             storage.update(EPISODES_FILE, ep['slug'], {'feed_published': True})
         except Exception:
-            app.logger.error('Feed update failed')
+            log_failure('Feed update failed')
             warnings.append('Local edit saved; feed update failed. Use Publish / retry in the library.')
     return warnings
 
@@ -1100,7 +1114,7 @@ def retry_publish(slug):
     except UserError:
         raise
     except Exception:
-        app.logger.error('Publishing failed')
+        log_failure('Publishing failed')
         raise UserError('Publishing failed; local audio is safe. Check R2 configuration and retry.', 502)
 
 
@@ -1188,7 +1202,7 @@ def delete_episode(slug):
             for key in set(keys):
                 get_r2_client().delete_object(Bucket=setting('R2_BUCKET'), Key=key)
         except Exception as exc:
-            app.logger.error('Remote deletion incomplete')
+            log_failure('Remote deletion incomplete')
             raise UserError('Remote deletion incomplete. Local episode retained; restore/check R2 settings and retry.', 502) from exc
     if not remote:
         storage.update(EPISODES_FILE, slug, {'delete_pending': True})

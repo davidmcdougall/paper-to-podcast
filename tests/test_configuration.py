@@ -224,7 +224,7 @@ def test_failed_move_never_switches_or_changes_source(config, tmp_path, monkeypa
     monkeypatch.setattr(library_locations.shutil, 'copy2', fail)
     with pytest.raises(OSError):
         move_library(config, tmp_path/'destination')
-    assert not config.file.exists()
+    assert reload(config).locations.library == source
     assert manifest(source) == before
 
 
@@ -288,7 +288,7 @@ def test_move_copy_corruption_never_switches(config, tmp_path, monkeypatch):
     monkeypatch.setattr(library_locations.shutil, 'copy2', corrupt)
     with pytest.raises(ConfigurationError, match='verification'):
         move_library(config, tmp_path/'target')
-    assert not config.file.exists()
+    assert reload(config).locations.library == source
     assert manifest(source) == before
 
 
@@ -373,3 +373,64 @@ def test_invalid_optional_r2_config_keeps_library_usable(appmod, client, monkeyp
     monkeypatch.setattr(appmod, 'r2_enabled', lambda: appmod.r2_state()[0])
     assert appmod.r2_state() == (False, True)
     assert client.get('/library').status_code == 200
+
+
+def test_first_library_registration_survives_later_dotenv(config):
+    config.environ['ANTHROPIC_API_KEY'] = 'environment-key'
+    config.prepare_library()
+    before = b'[{"slug":"existing","title":"Keep visible"}]'
+    config.locations.episodes.write_bytes(before)
+    config.locations.legacy_env.write_text('ANTHROPIC_API_KEY=later-env-key\n')
+    restarted = reload(config)
+    restarted.prepare_library()
+    assert restarted.locations.library == config.locations.library
+    assert restarted.locations.episodes.read_bytes() == before
+    assert not (config.base/'static').exists()
+    assert restarted.read()['paths']['library_dir'] == str(config.locations.library)
+
+
+def test_unregistered_ambiguous_libraries_are_not_guessed(config):
+    for root in (config.base/'static', config.locations.data/'library'):
+        root.mkdir(parents=True)
+        (root/'episodes.json').write_bytes(b'[]')
+    with pytest.raises(ConfigurationError, match='Two libraries'):
+        reload(config)
+    assert not config.file.exists()
+
+
+def test_unregistered_user_library_beats_later_dotenv(config):
+    config.locations.library.mkdir(parents=True)
+    config.locations.episodes.write_bytes(b'[]')
+    config.locations.legacy_env.write_text('PODCAST_TITLE=Later')
+    assert reload(config).locations.library == config.locations.library
+
+
+@pytest.mark.parametrize('plaintext', [False, True])
+def test_keychain_read_error_never_falls_through(config, monkeypatch, plaintext):
+    config.locations.legacy_env.write_text('ANTHROPIC_API_KEY=retired-key\n')
+    config.credentials.save('ANTHROPIC_API_KEY', 'current-key')
+    if plaintext:
+        config.save({'plaintext_secrets': True})
+    def locked(*args):
+        raise RuntimeError('sensitive backend text')
+    monkeypatch.setattr(config.credentials.backend(), 'get_password', locked)
+    monkeypatch.setattr(config.credentials, 'local', lambda: pytest.fail('must not try plaintext'))
+    monkeypatch.setattr(config, 'legacy', lambda: pytest.fail('must not try legacy'))
+    with pytest.raises(KeychainUnavailable, match='Unlock the keychain') as exc:
+        config.secret('ANTHROPIC_API_KEY')
+    assert 'sensitive' not in str(exc.value)
+
+
+@pytest.mark.parametrize('status', [403, None, 'secret-status'])
+def test_safe_failure_log_contains_diagnostics_without_bodies(appmod, caplog, status):
+    class ProviderFailure(Exception):
+        status_code = status
+    try:
+        raise ProviderFailure('SECRET BODY WITH API KEY')
+    except ProviderFailure:
+        appmod.log_failure('%s generation failed', 'Script')
+    assert 'exception=ProviderFailure' in caplog.text
+    assert f'http_status={status if type(status) is int else None}' in caplog.text
+    assert 'SECRET BODY' not in caplog.text
+    assert 'secret-status' not in caplog.text
+    assert all(record.exc_info is None for record in caplog.records)

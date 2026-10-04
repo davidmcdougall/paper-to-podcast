@@ -1,12 +1,12 @@
 # Configuration and data locations (PR-A)
 
-This is the configuration backend only. The browser settings/editor and installer are later PRs. Existing `.env` files continue to work without editing or conversion. No settings or secrets are automatically imported, relocated or deleted.
+This is the configuration backend only. The browser settings/editor and installer are later PRs. Existing `.env` files continue to work without editing or conversion. No legacy settings or secrets are automatically imported, relocated or deleted. Startup records the selected library and legacy .env path once in settings.toml.
 
 ## Locations
 
 New installations use `platformdirs` for the current user: typically `~/Library/Application Support/paper-to-podcast` on macOS and `%LOCALAPPDATA%\paper-to-podcast` on Windows. `settings.toml` uses the OS config directory; `library/` under the data directory holds `episodes.json`, audio, PDFs, feed and optional `logo.png`. Backups for an explicit move live under `backups/`. Logs and prompt storage are reserved for later PRs.
 
-If the installation has a `.env`, `static/episodes.json` or existing media, its `static/` library stays in place. A recorded `[paths].library_dir` takes precedence. A missing recorded library stops startup; it never becomes a silently empty replacement.
+On first startup the library choice is recorded, so a later `.env` cannot redirect an existing library. If no location is recorded and both candidate directories contain `episodes.json`, startup refuses to guess; set `[paths].library_dir` explicitly. Otherwise an existing user-data library takes precedence. If the installation has a `.env`, `static/episodes.json` or existing media, its `static/` library stays in place. A recorded `[paths].library_dir` takes precedence. A missing recorded library stops startup; it never becomes a silently empty replacement.
 
 `P2P_DATA_DIR` is the sole environment override for unusual setups. It must be absolute; it selects a data root with `config/settings.toml` and `library/`. It does not copy existing files. Do not use it as an upgrade/migration command. Remove it and restart to return to the previous location.
 
@@ -38,7 +38,7 @@ Anthropic, ElevenLabs, R2 access-key ID and R2 secret key use the native macOS K
 
 Precedence is process environment, native keychain, explicitly enabled local secrets file, legacy `.env`. Keychain entries are scoped by provider and normalized endpoint (including path); R2 entries are scoped to the account endpoint, not the public domain. Legacy R2 keys are usable only with the account from their `.env`. Environment credentials are explicit operator overrides. Additional configurable provider endpoints are deferred.
 
-`config.credentials.save(name, value)` attempts the keychain and fails with a safe message if unavailable. `allow_plaintext=True` is an explicit consent parameter for the future UI: only a failed keychain write takes this path. The fallback is `secrets.json` beside `settings.toml`, enabled by `plaintext_secrets = true`. It uses mode 0600 on POSIX and inherited profile permissions on Windows; no custom ACL code. Never place this file in a shared directory. Refusing consent saves no plaintext. A locked vault or failed replacement of an existing keychain entry must be resolved first; plaintext cannot silently replace a higher-priority key. No third-party/network keyring backend is auto-selected.
+`config.credentials.save(name, value)` attempts the keychain and fails with a safe message if unavailable. `allow_plaintext=True` is an explicit consent parameter for the future UI: only a failed keychain write takes this path. The fallback is `secrets.json` beside `settings.toml`, enabled by `plaintext_secrets = true`. It uses mode 0600 on POSIX and inherited profile permissions on Windows; no custom ACL code. Never place this file in a shared directory. Refusing consent saves no plaintext. A locked vault or failed replacement of an existing keychain entry must be resolved first; plaintext cannot silently replace a higher-priority key. A keychain read error stops resolution with an unlock/retry message; only a successful read returning no entry permits fallback. No third-party/network keyring backend is auto-selected.
 
 Credentials are resolved when needed and retained only for the current operation/SDK client; they are not stored on episodes or logged. In-app credential changes refuse a running operation and apply to later ones. External keychain/environment changes are observed on the next resolution; already-resolved credentials remain fixed until that operation ends. Python/SDK memory erasure is not guaranteed. No migration deletes keys from `.env` or the keychain.
 

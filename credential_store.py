@@ -91,7 +91,7 @@ class CredentialStore:
         try:
             value = self.backend().get_password(scope, name)
         except Exception:
-            value = None
+            raise KeychainUnavailable('Cannot read the keychain. Unlock the keychain and retry; no fallback credential was used.') from None
         if value is not None:
             return value
         if self.config.read().get('plaintext_secrets', False):
