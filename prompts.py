@@ -1,11 +1,12 @@
 """Literal prompt templates and immutable history; no providers or executable templates."""
+from contextlib import contextmanager
 from dataclasses import dataclass
 import hashlib
 import json
 from pathlib import Path
 import re
 from types import MappingProxyType
-from filelock import FileLock
+from filelock import FileLock, Timeout
 import storage
 
 REQUIRED = {
@@ -45,6 +46,8 @@ def validate(name, raw):
         raise PromptError('Prompt must be UTF-8.') from None
     if '\x00' in text:
         raise PromptError('Prompt cannot contain NUL characters.')
+    if 'source' in REQUIRED[name]:
+        text = text.rstrip()  # Editor final newlines do not move source into the instructions.
     fields = re.findall(r'\{([^{}]*)\}', text)
     remaining = re.sub(r'\{[^{}]*\}', '', text)
     if '{' in remaining or '}' in remaining or set(fields) != REQUIRED[name]:
@@ -60,12 +63,15 @@ class Template:
     raw: bytes
     sha256: str
     warning: str = ''
+    error: str = ''
 
     def render(self, **values):
+        if self.error:
+            raise PromptError(self.error)
         if set(values) != REQUIRED[self.name] or any(not isinstance(v, str) for v in values.values()):
             raise PromptError('Missing or invalid prompt inputs.')
         # One pass: braces in user/source text are literal and never evaluated.
-        return re.sub(r'\{([^{}]*)\}', lambda match: values[match[1]], self.raw.decode('utf-8'))
+        return re.sub(r'\{([^{}]*)\}', lambda match: values[match[1]], validate(self.name, self.raw))
 
     def prefix(self, **values):
         if 'source' not in REQUIRED[self.name]:
@@ -96,43 +102,102 @@ class PromptStore:
             storage.atomic_write(path, raw)
         return sha
 
+    @contextmanager
+    def _locked(self):
+        self.root.mkdir(parents=True, exist_ok=True)
+        try:
+            with FileLock(str(self.root / '.lock'), timeout=10):
+                yield
+        except Timeout:
+            raise PromptError('Prompt storage is busy; wait for the prompt edit or snapshot to finish and retry.') from None
+
+    def _write_seed(self, state):
+        storage.atomic_write(self.root / '.seeded', json.dumps(state, sort_keys=True).encode('utf-8'))
+
     def _seed(self):
         marker = self.root / '.seeded'
         if marker.exists():
-            if marker.read_bytes() != b'1\n':
-                raise PromptError('Prompt seed marker is corrupt; original preserved.')
-            return
-        # Only the first installation seeds files. Later deletion falls back with a warning.
+            raw = marker.read_bytes()
+            if raw != b'1\n':
+                try:
+                    state = json.loads(raw)
+                    valid = (isinstance(state, dict) and set(state) == {'schema_version', 'defaults'}
+                             and type(state['schema_version']) is int and state['schema_version'] == 1
+                             and isinstance(state['defaults'], dict) and set(state['defaults']) == set(REQUIRED)
+                             and all(value is None or isinstance(value, str) and re.fullmatch(r'[0-9a-f]{64}', value)
+                                     for value in state['defaults'].values()))
+                except (ValueError, UnicodeError):
+                    valid = False
+                if not valid:
+                    raise PromptError('Prompt seed marker is corrupt or unsupported; original preserved.')
+                return state
+            # Old marker has no baseline hashes. Adopt only byte-identical current
+            # defaults; preserve every ambiguous older/custom copy.
+            defaults = {}
+            for name in REQUIRED:
+                path = self.root / (name + '.md')
+                default = self._default(name)
+                defaults[name] = digest(default) if path.exists() and path.read_bytes() == default else None
+            state = {'schema_version': 1, 'defaults': defaults}
+            self._write_seed(state)
+            return state
+        defaults = {}
         for name in REQUIRED:
             path = self.root / (name + '.md')
+            default = self._default(name)
             if not path.exists():
-                storage.atomic_write(path, self._default(name))
-        storage.atomic_write(marker, b'1\n')
+                storage.atomic_write(path, default)
+            defaults[name] = digest(default) if path.read_bytes() == default else None
+        state = {'schema_version': 1, 'defaults': defaults}
+        self._write_seed(state)
+        return state
 
     def snapshot(self):
-        self.root.mkdir(parents=True, exist_ok=True)
-        with FileLock(str(self.root / '.lock'), timeout=10):
-            self._seed()
+        with self._locked():
+            state = self._seed()
             result = {}
             for name in REQUIRED:
                 warning = ''
+                reason = ''
                 try:
                     with (self.root / (name + '.md')).open('rb') as stream:
                         raw = stream.read(MAX_TEMPLATE_BYTES + 1)
                     validate(name, raw)
-                except (OSError, PromptError):
-                    raw = self._default(name)
-                    warning = f'{name} prompt missing or invalid; shipped default used. Repair or reset the editable prompt.'
-                sha = self._archive(name, raw)
-                result[name] = Template(name, raw, sha, warning)
+                except FileNotFoundError:
+                    reason = 'Editable file is missing.'
+                except OSError:
+                    reason = 'Editable file cannot be read.'
+                except PromptError as exc:
+                    reason = str(exc)
+                default = self._default(name)
+                if reason:
+                    raw = default
+                    warning = f'{name} prompt missing or invalid: {reason} Shipped default used; repair or reset the editable prompt.'
+                error = ''
+                try:
+                    sha = digest(raw)
+                    if not reason and sha == state['defaults'][name] and raw != default:
+                        # Archive both versions before replacing an untouched copy.
+                        self._archive(name, raw)
+                        self._archive(name, default)
+                        storage.atomic_write(self.root / (name + '.md'), default)
+                        raw = default
+                    self._archive(name, raw)
+                    if not reason and raw == default and state['defaults'][name] != digest(default):
+                        state['defaults'][name] = digest(default)
+                        self._write_seed(state)
+                except PromptError as exc:
+                    # A corrupt version blocks only this template's reuse. Other
+                    # templates and non-text operations remain usable.
+                    error = f'{name} prompt unavailable: {exc}'
+                result[name] = Template(name, raw, digest(raw), warning, error)
             return MappingProxyType(result)
 
     def save(self, name, text):
         raw = text.encode('utf-8')
         validate(name, raw)
-        self.root.mkdir(parents=True, exist_ok=True)
-        with FileLock(str(self.root / '.lock'), timeout=10):
-            self._seed()
+        with self._locked():
+            state = self._seed()
             path = self.root / (name + '.md')
             if path.exists():
                 previous = path.read_bytes()
@@ -140,6 +205,9 @@ class PromptStore:
                 self._archive(name, previous)
             sha = self._archive(name, raw)
             storage.atomic_write(path, raw)
+            if raw == self._default(name):
+                state['defaults'][name] = sha
+                self._write_seed(state)
         return sha
 
     def reset(self, name):
@@ -154,7 +222,10 @@ class PromptStore:
         self._default(name)
         if not re.fullmatch(r'[0-9a-f]{64}', sha):
             raise PromptError('Invalid prompt history hash.')
-        raw = (self.history_root / name / (sha + '.md')).read_bytes()
+        try:
+            raw = (self.history_root / name / (sha + '.md')).read_bytes()
+        except FileNotFoundError:
+            raise PromptError('Prompt history version was not found.') from None
         if digest(raw) != sha:
             raise PromptError('Prompt history is corrupt; original preserved for repair.')
         return raw

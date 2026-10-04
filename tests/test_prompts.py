@@ -20,7 +20,7 @@ def test_shipped_requests_match_pre_extraction_fixture(store):
 
 
 @pytest.mark.parametrize('invalid', [
-    'Source {source} followed by instructions', '{source}\n', '{source}{source}',
+    'Source {source} followed by instructions', '{source}{source}',
     '{source.__class__}', '{source!r}', '{source:>10}', '{{source}}', '{unknown}{source}',
     '{source}\x00', '{source', '}', '',
 ])
@@ -91,7 +91,11 @@ def test_corrupt_archived_template_refuses_overwrite(store):
     template = store.snapshot()['metadata']
     path = store.history_root/'metadata'/(template.sha256+'.md')
     path.write_bytes(b'corrupt')
-    with pytest.raises(PromptError):store.snapshot()
+    snapshot=store.snapshot()
+    assert snapshot['metadata'].error
+    with pytest.raises(PromptError,match='history is corrupt'):
+        snapshot['metadata'].render(source='Paper')
+    assert snapshot['summary'].render(title='Paper',source='Source')
     assert path.read_bytes() == b'corrupt'
 
 
@@ -159,7 +163,7 @@ def test_full_generation_attempts_and_rendered_requests(appmod, client, pdf, mon
 
 def test_failed_voice_and_metadata_are_recorded_and_paid_draft_survives(appmod, client, pdf, monkeypatch):
     mock_claude(appmod, monkeypatch, ['First draft', RuntimeError('secret provider diagnostics'),
-                'Summary', '{"authors":[42],"topics":[]}', 'Show notes'])
+                'Summary', '{"authors":"invalid list","topics":[]}', 'Show notes'])
     result=client.post('/generate-script',data={'pdf':(io.BytesIO(pdf),'paper.pdf')})
     assert result.status_code==200
     ep=result.json
@@ -306,3 +310,136 @@ def test_external_edit_during_call_does_not_change_voice_snapshot(appmod,monkeyp
     assert calls[1]['messages'][0]['content']==initial.render(script='First draft')
     with appmod.configuration.operation():
         assert appmod.prompt_snapshot()['voice_edit'].raw==b'New voice edit\n{script}'
+
+
+@pytest.mark.parametrize('ending',['\n','\r\n',' \t\n\n'])
+def test_normal_editor_save_preserves_raw_but_renders_source_last(store,ending):
+    original=store.snapshot()['script']
+    edited='One-word-edit\n'+original.raw.decode()+ending
+    sha=store.save('script',edited)
+    template=store.snapshot()['script']
+    assert template.warning==''
+    assert store.historical('script',sha)==edited.encode()
+    assert template.render(**{k:SAMPLE[k] for k in REQUIRED['script']}).endswith(SAMPLE['source'])
+    assert template.prefix(length_rule='Short',notes='').endswith('Paper source:\n')
+
+
+def test_corrupt_prompt_archive_does_not_block_delete(appmod,client,episode):
+    store=PromptStore(appmod.configuration.locations.data)
+    template=store.snapshot()['metadata']
+    path=store.history_root/'metadata'/(template.sha256+'.md')
+    path.write_bytes(b'corrupt')
+    response=client.post('/delete/'+episode['slug'])
+    assert response.status_code==200
+    assert appmod.load_episodes()==[]
+    assert path.read_bytes()==b'corrupt'
+
+
+def test_untouched_seed_upgrades_and_archives_old_default(store,tmp_path):
+    original=store.snapshot()['metadata']
+    shipped=tmp_path/'new-release';shipped.mkdir()
+    for name in REQUIRED:(shipped/(name+'.md')).write_bytes(store._default(name))
+    (shipped/'metadata.md').write_bytes(b'Better shipped instructions\n{source}')
+    upgraded=PromptStore(tmp_path,shipped)
+    current=upgraded.snapshot()['metadata']
+    assert current.raw==b'Better shipped instructions\n{source}'
+    assert upgraded.historical('metadata',original.sha256)==original.raw
+    marker=json.loads((store.root/'.seeded').read_text(encoding='utf-8'))
+    assert marker['defaults']['metadata']==current.sha256
+
+
+def test_external_editor_newline_keeps_custom_prompt(store):
+    store.snapshot()
+    raw=b'Custom instructions\n{source}\r\n'
+    (store.root/'metadata.md').write_bytes(raw)
+    template=store.snapshot()['metadata']
+    assert template.raw==raw and not template.warning
+    assert template.render(source='Paper')=='Custom instructions\nPaper'
+    assert store.historical('metadata',template.sha256)==raw
+
+
+@pytest.mark.parametrize('raw,reason',[(b'Custom {unknown}','literal placeholders'),
+    (b'Custom {source} trailing instructions','exactly once'),(b'\xff{source}','UTF-8')])
+def test_fallback_warning_explains_specific_invalid_edit(store,raw,reason):
+    store.snapshot();(store.root/'metadata.md').write_bytes(raw)
+    assert reason in store.snapshot()['metadata'].warning
+
+
+def test_nontext_routes_do_not_snapshot_prompts(appmod,client,episode,monkeypatch):
+    monkeypatch.setattr(PromptStore,'snapshot',lambda *a:pytest.fail('non-text operation must not access prompts'))
+    assert client.post('/rename/'+episode['slug'],json={'title':'Renamed'}).status_code==200
+    assert client.post('/update-meta/'+episode['slug'],json={'authors':'Jane','topics':'research'}).status_code==200
+    monkeypatch.setattr(appmod,'publish_episode',lambda ep:dict(ep,audio_url='local audio'))
+    assert client.post('/publish/'+episode['slug']).status_code==200
+    assert client.post('/delete/'+episode['slug']).status_code==200
+
+
+def test_corrupt_metadata_archive_only_blocks_metadata_pass(appmod,client,pdf,monkeypatch):
+    store=PromptStore(appmod.configuration.locations.data)
+    metadata=store.snapshot()['metadata']
+    path=store.history_root/'metadata'/(metadata.sha256+'.md')
+    path.write_bytes(b'corrupt')
+    calls=mock_claude(appmod,monkeypatch,['Draft','Edited','Summary','Notes'])
+    result=client.post('/generate-script',data={'pdf':(io.BytesIO(pdf),'paper.pdf')})
+    assert result.status_code==200 and result.json['script']=='Edited'
+    assert len(calls)==4
+    assert any('Metadata failed' in warning for warning in result.json['warnings'])
+    assert path.read_bytes()==b'corrupt'
+
+
+def test_prompt_lock_timeout_gives_specific_error(store,monkeypatch):
+    import prompts
+    from filelock import Timeout
+    class BusyLock:
+        def __enter__(self):raise Timeout('test-prompt-lock')
+        def __exit__(self,*args):pass
+    monkeypatch.setattr(prompts,'FileLock',lambda *a,**k:BusyLock())
+    for operation in (store.snapshot,lambda:store.save('metadata','Custom\n{source}')):
+        with pytest.raises(PromptError,match='Prompt storage is busy'):operation()
+
+
+def test_unknown_historical_hash_is_prompt_error(store):
+    store.snapshot()
+    with pytest.raises(PromptError,match='was not found'):
+        store.historical('metadata','0'*64)
+
+
+def test_metadata_tolerates_extra_fields_and_filters_nonstrings(appmod,monkeypatch):
+    mock_claude(appmod,monkeypatch,['{"authors":["Jane",42],"topics":[null,"research"],"title":"Extra"}'])
+    with appmod.configuration.operation():
+        assert appmod.extract_metadata('Paper','fast',[])=={'authors':['Jane'],'topics':['research']}
+        assert appmod.operation_attempts()[0]['status']=='succeeded'
+
+
+def test_history_update_warning_is_shown_once(appmod,client,pdf,monkeypatch):
+    mock_claude(appmod,monkeypatch,['Draft','Edited','Summary','{"authors":[],"topics":[]}','Notes'])
+    original=AttemptJournal.write
+    def failure(self,record):
+        if record['step']=='script' and record['status']=='succeeded':raise OSError('audit disk error')
+        return original(self,record)
+    monkeypatch.setattr(AttemptJournal,'write',failure)
+    response=client.post('/generate-script',data={'pdf':(io.BytesIO(pdf),'paper.pdf')})
+    assert response.status_code==200
+    assert response.json['warnings'].count(appmod.HISTORY_UPDATE_WARNING)==1
+    assert response.json['generation_attempts'][0]['journal_update_failed']
+
+
+def test_legacy_seed_marker_migrates_conservatively(store,tmp_path):
+    original=store.snapshot()
+    (store.root/'metadata.md').write_bytes(b'Old custom or unknown default\n{source}')
+    (store.root/'.seeded').write_bytes(b'1\n')
+    migrated=store.snapshot()
+    assert migrated['metadata'].raw==b'Old custom or unknown default\n{source}'
+    marker=json.loads((store.root/'.seeded').read_text(encoding='utf-8'))
+    assert marker['defaults']['metadata'] is None
+    assert marker['defaults']['script']==original['script'].sha256
+    store.reset('metadata')
+    marker=json.loads((store.root/'.seeded').read_text(encoding='utf-8'))
+    assert marker['defaults']['metadata']==original['metadata'].sha256
+
+
+@pytest.mark.parametrize('content',[b'{broken',b'{"schema_version":2,"defaults":{}}',b'false'])
+def test_corrupt_seed_marker_refuses_rewrite(store,content):
+    store.snapshot();marker=store.root/'.seeded';marker.write_bytes(content)
+    with pytest.raises(PromptError,match='corrupt or unsupported'):store.snapshot()
+    assert marker.read_bytes()==content

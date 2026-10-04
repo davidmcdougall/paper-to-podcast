@@ -55,7 +55,7 @@ class Settings:
 @dataclass
 class Operation:
     settings: Settings
-    prompts: Mapping = field(default_factory=dict)
+    prompts: Mapping | None = None
     attempts: list = field(default_factory=list)
     source: Mapping = field(default_factory=dict)
     # Resolved lazily; never serialized, logged or included in repr.
@@ -214,6 +214,15 @@ class Configuration:
             operation.secrets[name] = self.credentials.resolve(name)
         return operation.secrets[name]
 
+    def prompt_snapshot(self):
+        from prompts import PromptStore
+        operation = self._operation.get()
+        if operation is None:
+            return PromptStore(self.locations.data).snapshot()
+        if operation.prompts is None:
+            operation.prompts = PromptStore(self.locations.data).snapshot()
+        return operation.prompts
+
     @contextmanager
     def operation(self):
         if self._operation.get() is not None:
@@ -222,8 +231,7 @@ class Configuration:
         self.locations.library.mkdir(parents=True, exist_ok=True)
         with FileLock(str(self.locations.episodes) + '.operation.lock', timeout=0):
             self.check_location()
-            from prompts import PromptStore
-            state = Operation(self.snapshot(), PromptStore(self.locations.data).snapshot())
+            state = Operation(self.snapshot())
             token = self._operation.set(state)
             try:
                 yield

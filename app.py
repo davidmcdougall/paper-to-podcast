@@ -20,7 +20,7 @@ from filelock import Timeout as LockTimeout
 from tinytag import TinyTag
 from werkzeug.exceptions import HTTPException
 import storage
-from prompts import PromptStore, PromptError, AttemptJournal, input_reference, SAMPLING_VERSIONS
+from prompts import PromptError, AttemptJournal, input_reference, SAMPLING_VERSIONS
 from pdf_text import MAX_PDF_BYTES
 import anthropic
 import boto3
@@ -401,8 +401,7 @@ def operation_attempts():
 
 
 def prompt_snapshot():
-    operation = configuration._operation.get()
-    return operation.prompts if operation else PromptStore(configuration.locations.data).snapshot()
+    return configuration.prompt_snapshot()
 
 
 def complete_message(model, prompt, max_tokens, usage, *, source=None, warnings=None,
@@ -446,6 +445,9 @@ def complete_message(model, prompt, max_tokens, usage, *, source=None, warnings=
     return result
 
 
+HISTORY_UPDATE_WARNING = 'Generation history update failed; response and attempt details retained in the episode.'
+
+
 def finish_attempt(record, warnings):
     try:
         AttemptJournal(configuration.locations.data).write(record)
@@ -453,8 +455,8 @@ def finish_attempt(record, warnings):
         # A post-call audit failure must not discard an already paid response.
         record['journal_update_failed'] = True
         log_failure('Generation history update failed; response retained')
-        if warnings is not None:
-            warnings.append('Generation history update failed; response retained in the draft.')
+        if warnings is not None and HISTORY_UPDATE_WARNING not in warnings:
+            warnings.append(HISTORY_UPDATE_WARNING)
 
 
 def _complete_message(model, prompt, max_tokens, usage, *, source=None, warnings=None,
@@ -541,11 +543,9 @@ def generate_podcast_script(paper_text, notes="", target_words=None, model=None,
 def parse_metadata(raw):
     raw = re.sub(r'^```(?:json)?\s*|\s*```$', '', raw.strip(), flags=re.IGNORECASE)
     data = json.loads(raw)
-    if (not isinstance(data, dict) or set(data) != {'authors', 'topics'}
-            or any(not isinstance(data.get(k), list) or any(not isinstance(v, str) for v in data[k])
-                   for k in ('authors', 'topics'))):
+    if not isinstance(data, dict) or any(not isinstance(data.get(k), list) for k in ('authors', 'topics')):
         raise ValueError("Invalid metadata schema")
-    return {k: [v[:200] for v in data[k][:30]] for k in ("authors", "topics")}
+    return {k: [v[:200] for v in data[k][:30] if isinstance(v, str)] for k in ("authors", "topics")}
 
 
 def extract_metadata(paper_text, model, usage):
@@ -902,6 +902,7 @@ def json_body():
 
 
 def _prepare_episode(req):
+    prompt_snapshot()  # Freeze templates before any input/provider network access.
     require_keys('ANTHROPIC_API_KEY')
     # Check the store before incurring any provider charges.
     load_episodes()
@@ -943,7 +944,7 @@ def _prepare_episode(req):
     writing, fast = resolve_models(req.form)
     try:
         script = generate_podcast_script(paper_text, notes, target, writing, fast, usage, warnings)
-    except UserError:
+    except (UserError, PromptError):
         raise
     except Exception as exc:
         log_failure('Script generation failed')
@@ -979,8 +980,9 @@ def _prepare_episode(req):
         except Exception:
             log_failure('%s generation failed', name)
             warnings.append(f'{name.capitalize()} failed; script is saved and can still be voiced.')
-    if any(record.get('journal_update_failed') for record in operation_attempts()):
-        warnings.append('Generation history update failed; attempt details retained in the episode.')
+    if (any(record.get('journal_update_failed') for record in operation_attempts())
+            and HISTORY_UPDATE_WARNING not in warnings):
+        warnings.append(HISTORY_UPDATE_WARNING)
     ep.update(warnings=warnings, usage=usage, generation_attempts=operation_attempts())
     return storage.update(EPISODES_FILE, slug, ep)
 
@@ -994,6 +996,7 @@ def generate_script_only():
 @app.route('/generate', methods=['POST'])
 @exclusive_mutation
 def generate():
+    prompt_snapshot()
     require_keys('ELEVENLABS_API_KEY')
     try:
         get_voice_id(ElevenLabs(api_key=credential('ELEVENLABS_API_KEY'),

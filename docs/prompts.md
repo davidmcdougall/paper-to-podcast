@@ -3,15 +3,25 @@
 Five shipped UTF-8 Markdown templates live in `prompt_templates/`: `script`,
 `voice_edit`, `summary`, `show_notes` and `metadata`. Their rendered requests match
 fixtures captured before extraction. Git attributes pin shipped templates to LF
-line endings on every OS, while editable/archive bytes are preserved exactly. System instructions and metadata schema
-validation remain in Python. No dependency was added.
+line endings on every OS, while editable/archive bytes are preserved exactly.
+System instructions and metadata schema validation remain in Python. No dependency was added.
 
-The first mutating operation seeds editable copies in `<user data>/prompts/`.
-The data location comes from Configuration (`platformdirs` or `P2P_DATA_DIR`),
-independent of the selected episode library. Later launches/upgrades never
-replace edits. A missing or invalid editable file uses the shipped default and
-adds a warning to generated episodes; it is not silently repaired. A corrupt
-immutable archive refuses reuse instead of overwriting history.
+The first text-generating operation or backend access seeds editable copies in
+`<user data>/prompts/`. The data location comes from Configuration (`platformdirs`
+or `P2P_DATA_DIR`), independent of the selected episode library. A versioned JSON
+`.seeded` file records each template's seeded-default SHA-256. On later access,
+an editable copy matching its seeded hash receives a newer shipped default;
+both old and new bytes are archived before replacing it. Custom edits remain
+unchanged. Reset opts the template back into future default upgrades.
+
+The original `1\n` marker migrates conservatively: copies identical to current
+shipped defaults receive a baseline hash; ambiguous older/custom copies get a
+null baseline and remain unchanged until reset. Invalid or unsupported marker
+versions refuse rewriting. A missing or invalid editable file uses the shipped
+default and reports the specific reason; it is not silently repaired. A corrupt
+immutable archive blocks only the affected template's reuse. For example,
+corrupt metadata history prevents the optional metadata pass but preserves the
+paid script, and it cannot block episode deletion or publishing.
 
 Templates are plain text, limited to 32,000 UTF-8 bytes. Each has these required
 literal placeholders (no expressions, conversions, format specifiers or other
@@ -25,11 +35,14 @@ braces):
 | show_notes | `{title}`, `{authors}`, `{source}` |
 | metadata | `{source}` |
 
-`{source}` must appear exactly once, as the last bytes of each source-bearing
-template (no trailing newline). Substitution takes one pass: braces inside paper
+`{source}` must appear exactly once at the end of each source-bearing template,
+allowing trailing whitespace and editor-added LF/CRLF newlines. Validation and
+rendering ignore that suffix; history hashes and archives preserve the raw bytes. Substitution takes one pass: braces inside paper
 text, notes or scripts remain literal. Editorial instructions such as avoiding
 invented citations cannot guarantee the model's accuracy. Finished responses,
-nonempty text and metadata JSON structure are checked before recording success.
+nonempty text and the required metadata list fields are checked before recording
+success. Extra metadata keys are ignored and non-string list items filtered,
+preserving the previous behavior.
 HTML escaping remains the responsibility of the existing views.
 
 ## Backend API
@@ -49,8 +62,10 @@ in this PR. A developer can use the backend API now.
 
 ## Snapshots and attempt records
 
-Configuration takes a prompt snapshot alongside settings at operation start.
-An external edit or backend save during generation affects the next operation.
+Configuration loads prompts lazily for text generation. Text-generating routes
+freeze their snapshot before input/provider network access, then reuse it for
+all passes. Non-text mutations do not access prompt storage. An external edit or
+backend save during generation affects the next text operation.
 Secrets are still resolved lazily and never passed into prompt/history records.
 
 Each application text-generation attempt has a unique ID and a JSON record in
@@ -84,3 +99,17 @@ Archives and input blobs survive library moves because they belong to the
 installation's user-data directory. No automatic pruning or deletion was added.
 Deleting an episode does not erase this history. Exact regeneration is not
 promised: provider defaults, model versions and sampling can change.
+
+
+## Follow-ups before the browser editor and public release
+
+PR-F history dates can use immutable archive-file modification times, labelled
+“first archived.” This is a set of versions, not a chronological edit log;
+resetting to a previously archived hash does not create a new version date.
+No new timestamp file format is required for that display.
+
+Before public release, decide and implement an explicit delete-with-history
+option. It must remove the episode's attempt records and only input blobs no
+other retained attempts reference, including failed attempts without an episode.
+The existing delete action still retains history. No destructive cleanup or new
+browser option is introduced by these PR-B review fixes.
