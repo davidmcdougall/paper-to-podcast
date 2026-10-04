@@ -39,3 +39,8 @@ static/episodes.json.bak
 static/episodes.json.migration.bak
 
 static/episodes.json.migration.*.bak
+
+# User configuration is never a repository artifact
+settings.toml
+settings.toml.bak
+secrets.json

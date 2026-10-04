@@ -95,12 +95,12 @@ def test_foreign_flask_session_cookie_does_not_break_csrf(client,episode):
 
 
 def test_r2_domain_change_keeps_ownership(appmod,client,episode,monkeypatch):
-    monkeypatch.setattr(appmod,'R2_ENABLED',True)
-    monkeypatch.setattr(appmod,'R2_PUBLIC_URL','https://custom.test')
+    monkeypatch.setattr(appmod,'r2_enabled',lambda: True)
+    monkeypatch.setenv('R2_PUBLIC_URL','https://custom.test')
     path=appmod.AUDIO_DIR/'test-id.mp3';path.write_bytes(b'audio')
     storage.update(appmod.EPISODES_FILE,'test-id',{'file_size':5,'r2_url':'https://old.r2.dev/audio/test-id.mp3',
         'r2_key':'audio/test-id.mp3','r2_location':appmod.r2_location()})
-    monkeypatch.setattr(appmod,'upload_to_r2',lambda path,key,**kw:appmod.R2_PUBLIC_URL+'/'+key)
+    monkeypatch.setattr(appmod,'upload_to_r2',lambda path,key,**kw:appmod.setting('R2_PUBLIC_URL')+'/'+key)
     monkeypatch.setattr(appmod,'publish_feed',lambda *a,**kw:None)
     deleted=[]
     monkeypatch.setattr(appmod,'get_r2_client',lambda:N(delete_object=lambda **kw:deleted.append(kw['Key'])))
@@ -112,7 +112,7 @@ def test_r2_domain_change_keeps_ownership(appmod,client,episode,monkeypatch):
 
 @pytest.mark.parametrize('problem',['disabled','bucket','legacy-host'])
 def test_r2_preflight_failure_does_not_mark_pending(appmod,client,episode,monkeypatch,problem):
-    monkeypatch.setattr(appmod,'R2_ENABLED',problem!='disabled')
+    monkeypatch.setattr(appmod,'r2_enabled',lambda: problem!='disabled')
     ep={'r2_url':'https://old.test/audio/test-id.mp3'}
     if problem=='bucket':ep['r2_location']={'account':'other','bucket':'other'}
     storage.update(appmod.EPISODES_FILE,'test-id',ep)
@@ -122,7 +122,7 @@ def test_r2_preflight_failure_does_not_mark_pending(appmod,client,episode,monkey
 
 
 def test_legacy_r2_adoption_requires_object_presence(appmod,client,episode,monkeypatch):
-    monkeypatch.setattr(appmod,'R2_ENABLED',True)
+    monkeypatch.setattr(appmod,'r2_enabled',lambda: True)
     storage.update(appmod.EPISODES_FILE,'test-id',{'r2_url':'https://old.test/audio/test-id.mp3','file_size':5})
     (appmod.AUDIO_DIR/'test-id.mp3').write_bytes(b'audio')
     monkeypatch.setattr(appmod,'get_r2_client',lambda:N(head_object=lambda **kw:(_ for _ in ()).throw(RuntimeError('missing'))))
@@ -141,7 +141,7 @@ def test_legacy_r2_adoption_requires_object_presence(appmod,client,episode,monke
 
 
 def test_obsidian_readable_stable_name_heading_link(appmod,episode,monkeypatch,tmp_path):
-    monkeypatch.setattr(appmod,'OBSIDIAN_VAULT_PATH',str(tmp_path))
+    monkeypatch.setenv('OBSIDIAN_VAULT_PATH',str(tmp_path))
     ep=dict(episode,title='Readable title',r2_url='https://example.test/audio/episode.mp3')
     appmod.save_to_obsidian(ep)
     saved=appmod.find_episode(ep['slug']);name=saved['obsidian_file']
@@ -160,7 +160,7 @@ def test_fenced_metadata(appmod,monkeypatch):
 
 
 def test_delete_feed_preparation_failure_does_not_mark_pending(appmod,client,episode,monkeypatch):
-    monkeypatch.setattr(appmod,'R2_ENABLED',True)
+    monkeypatch.setattr(appmod,'r2_enabled',lambda: True)
     storage.update(appmod.EPISODES_FILE,'test-id',{'r2_location':appmod.r2_location(),
         'r2_key':'audio/test-id.mp3','r2_url':'https://old.test/audio/test-id.mp3'})
     monkeypatch.setattr(appmod,'build_rss',lambda *a:(_ for _ in ()).throw(ValueError('bad feed')))
@@ -169,7 +169,7 @@ def test_delete_feed_preparation_failure_does_not_mark_pending(appmod,client,epi
 
 
 def test_delete_upload_uncertainty_retains_pending_and_retry_works(appmod,client,episode,monkeypatch,tmp_path):
-    monkeypatch.setattr(appmod,'R2_ENABLED',True)
+    monkeypatch.setattr(appmod,'r2_enabled',lambda: True)
     monkeypatch.setattr(appmod,'BASE_DIR',tmp_path)
     storage.update(appmod.EPISODES_FILE,'test-id',{'r2_location':appmod.r2_location(),
         'r2_key':'audio/test-id.mp3','r2_url':'https://old.test/audio/test-id.mp3'})
@@ -184,7 +184,7 @@ def test_delete_upload_uncertainty_retains_pending_and_retry_works(appmod,client
 
 
 def test_delete_preserves_shared_legacy_remote_audio(appmod,client,episode,monkeypatch):
-    monkeypatch.setattr(appmod,'R2_ENABLED',True)
+    monkeypatch.setattr(appmod,'r2_enabled',lambda: True)
     fields={'r2_location':appmod.r2_location(),'r2_key':'audio/shared.mp3','r2_url':'https://old.test/audio/shared.mp3'}
     storage.update(appmod.EPISODES_FILE,'test-id',fields)
     storage.insert(appmod.EPISODES_FILE,dict(episode,slug='other',**fields))

@@ -10,11 +10,12 @@ Single-user loopback-only Flask app. Read README.md for installation, data flow,
 - Model output and PDF text are untrusted. Use textContent/Jinja escaping, not raw HTML.
 - Keep provider tests mocked. Do not run paid or public publishing checks without explicit authorization and suitable test accounts.
 - Run `python -m pytest -q` in the private environment. CI covers macOS/Windows, Python 3.10/3.13; do not claim a matrix pass until it ran.
-- Persistence: static/episodes.json, .json.bak, static/audio/, static/pdfs/. These are ignored and must never be committed.
+- Persistence: legacy installs retain static/; new installs use user storage. Resolve locations through Configuration (see docs/configuration.md). Settings, secrets and generated media must never be committed.
 
 ## Code map
 
 - `app.py`: Flask routes, request protection, provider calls, generation and R2/feed workflows.
+- `configuration.py`, `credential_store.py`, `library_locations.py`: settings precedence, endpoint-bound secrets and explicit copy/verify/switch library moves. Never log credential values or provider exception bodies.
 - `storage.py`: locked JSON persistence, backups and legacy-ID migration.
 - `pdf_text.py`: bounded PDF extraction worker, launched in a timed subprocess.
 - `templates/`, `static/ui.js`: upload/draft and library views; shared CSRF fetch helper.
