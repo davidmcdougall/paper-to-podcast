@@ -9,7 +9,7 @@ import storage
 
 @pytest.mark.parametrize('remote,reported_size',[(b'wrong',5),(b'different-size',14)])
 def test_adoption_rejects_wrong_audio_and_never_adopts_or_deletes(appmod,client,episode,monkeypatch,remote,reported_size):
-    monkeypatch.setattr(appmod,'R2_ENABLED',True)
+    monkeypatch.setattr(appmod,'r2_enabled',lambda: True)
     storage.update(appmod.EPISODES_FILE,'test-id',{'r2_url':'https://old.test/audio/test-id.mp3','file_size':5})
     (appmod.AUDIO_DIR/'test-id.mp3').write_bytes(b'audio')
     body=io.BytesIO(remote)
@@ -25,7 +25,7 @@ def test_adoption_rejects_wrong_audio_and_never_adopts_or_deletes(appmod,client,
 
 
 def test_adoption_refuses_missing_local_original(appmod,client,episode,monkeypatch):
-    monkeypatch.setattr(appmod,'R2_ENABLED',True)
+    monkeypatch.setattr(appmod,'r2_enabled',lambda: True)
     storage.update(appmod.EPISODES_FILE,'test-id',{'r2_url':'https://old.test/audio/test-id.mp3','file_size':5})
     monkeypatch.setattr(appmod,'get_r2_client',lambda:N(head_object=lambda **kw:pytest.fail('no original')))
     assert client.post('/adopt-r2/test-id').status_code==400
@@ -33,7 +33,7 @@ def test_adoption_refuses_missing_local_original(appmod,client,episode,monkeypat
 
 
 def test_adoption_verifies_every_retained_key_before_saving(appmod,client,episode,monkeypatch):
-    monkeypatch.setattr(appmod,'R2_ENABLED',True)
+    monkeypatch.setattr(appmod,'r2_enabled',lambda: True)
     storage.update(appmod.EPISODES_FILE,'test-id',{'r2_url':'https://old.test/audio/test-id.mp3','file_size':5,
         'remote_keys':['audio/older.mp3','audio/test-id.mp3']})
     (appmod.AUDIO_DIR/'test-id.mp3').write_bytes(b'audio')
@@ -101,7 +101,7 @@ def test_unique_legacy_guid_is_retained_and_duplicate_guids_are_unique(appmod,ep
 
 
 def test_legacy_obsidian_names_do_not_collide_or_overwrite_old_notes(appmod,episode,monkeypatch,tmp_path):
-    monkeypatch.setattr(appmod,'OBSIDIAN_VAULT_PATH',str(tmp_path))
+    monkeypatch.setenv('OBSIDIAN_VAULT_PATH',str(tmp_path))
     old=tmp_path/'sameprefix-first.md';old.write_text('Hand edited v1 note',encoding='utf-8')
     for slug in ['sameprefix-first','sameprefix-second']:
         ep=dict(episode,slug=slug,title='Same title')
@@ -113,7 +113,7 @@ def test_legacy_obsidian_names_do_not_collide_or_overwrite_old_notes(appmod,epis
 
 
 def test_obsidian_refuses_another_episodes_assigned_name(appmod,episode,monkeypatch,tmp_path):
-    monkeypatch.setattr(appmod,'OBSIDIAN_VAULT_PATH',str(tmp_path))
+    monkeypatch.setenv('OBSIDIAN_VAULT_PATH',str(tmp_path))
     storage.update(appmod.EPISODES_FILE,episode['slug'],{'obsidian_file':'shared.md'})
     storage.insert(appmod.EPISODES_FILE,dict(episode,slug='other',obsidian_file='shared.md'))
     (tmp_path/'shared.md').write_text('Original',encoding='utf-8')

@@ -15,7 +15,7 @@ def test_bad_and_scanned_pdf(appmod):
 
 
 def test_missing_keys_before_spending(appmod,client,pdf,monkeypatch):
-    monkeypatch.setattr(appmod,'ELEVENLABS_API_KEY',None)
+    monkeypatch.setenv('ELEVENLABS_API_KEY','')
     monkeypatch.setattr(appmod,'_prepare_episode',lambda *a:pytest.fail('must not spend'))
     assert client.post('/generate',data={'pdf':(io.BytesIO(pdf),'paper.pdf')}).status_code==400
 

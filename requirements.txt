@@ -6,3 +6,9 @@ elevenlabs>=2.70.0,<3
 boto3>=1.43.106,<2
 tinytag>=2.3.2,<3
 filelock>=4.0.8,<5
+
+# Local configuration, secure OS credentials and Python 3.10 TOML support
+platformdirs>=4.12.2,<5
+keyring>=25.7,<26
+tomli>=2.4.1,<3
+tomli-w>=1.2,<2

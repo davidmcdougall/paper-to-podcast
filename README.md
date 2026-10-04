@@ -201,6 +201,10 @@ Original application code is MIT; see [LICENSE](LICENSE). Dependency licenses an
 
 The simple `static/favicon.svg` was authored for this project under MIT. The older raster favicon assets have been removed from the current tree because their provenance was undocumented; they remain in git history. Supply artwork you have permission to publish. Screenshots contain demonstration paper titles and are not paper reproductions.
 
+## Configuration and data locations
+
+Existing `.env` files and libraries continue to work in place. New installations use OS user storage; `settings.toml` and native keychain support are now available as a backend. The browser settings page and installer are not part of this change. See [configuration and location details](docs/configuration.md), including precedence and the explicit library-move backend. Never use `P2P_DATA_DIR` as a migration command.
+
 ## Upgrading an existing library
 
 Back up `static/` and `.env` first. On first read, invalid or duplicate v1 IDs are assigned permanent UUIDs under the library lock. Each migration saves a timestamped `episodes.json.migration.*.bak` (the first also keeps `episodes.json.migration.bak`), copies safely located audio/PDF files to the new IDs, and preserves original files plus `legacy_slug`/`legacy_files`. Duplicate v1 entries may already share overwritten media; migration cannot recover lost versions. Missing/unsafe files are left as drafts with a migration warning.
