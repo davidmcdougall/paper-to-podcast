@@ -43,3 +43,13 @@ typing_extensions==4.16.0
 urllib3==2.8.0
 websockets==16.1.1
 Werkzeug==3.1.9
+
+# PR-A local configuration dependencies
+platformdirs==4.12.2
+keyring==25.7.0
+tomli==2.4.1
+tomli-w==1.2.0
+jaraco.classes==3.4.0
+jaraco.context==6.1.2
+jaraco.functools==4.6.0
+more-itertools==11.1.0

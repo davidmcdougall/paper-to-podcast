@@ -1,4 +1,7 @@
 import io
+import os
+import tempfile
+from dataclasses import replace
 import sys
 from pathlib import Path
 from types import SimpleNamespace as N
@@ -6,7 +9,11 @@ import pytest
 from pypdf import PdfWriter
 from pypdf.generic import DecodedStreamObject, NameObject, DictionaryObject
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+# Never read a developer's .env/keychain or create their library during collection.
+_test_home = tempfile.TemporaryDirectory(prefix='p2p-tests-')
+os.environ['P2P_DATA_DIR'] = _test_home.name
 import app as application
+from configuration import Configuration, DEFAULTS, SECRET_NAMES
 
 
 @pytest.fixture
@@ -16,12 +23,18 @@ def appmod(tmp_path, monkeypatch):
     monkeypatch.setattr(a, 'PDF_DIR', tmp_path/'pdfs'); a.PDF_DIR.mkdir()
     monkeypatch.setattr(a, 'EPISODES_FILE', tmp_path/'episodes.json')
     monkeypatch.setattr(a, 'BASE_DIR', Path(a.__file__).resolve().parent)
-    monkeypatch.setattr(a, 'ANTHROPIC_API_KEY', 'test-anthropic-key')
-    monkeypatch.setattr(a, 'ELEVENLABS_API_KEY', 'test-eleven-key')
-    monkeypatch.setattr(a, 'OBSIDIAN_VAULT_PATH', '')
+    for name in set(DEFAULTS) | SECRET_NAMES:
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv('P2P_DATA_DIR', str(tmp_path/'config-home'))
+    monkeypatch.setenv('ANTHROPIC_API_KEY', 'test-anthropic-key')
+    monkeypatch.setenv('ELEVENLABS_API_KEY', 'test-eleven-key')
+    config = Configuration(tmp_path/'empty-install')
+    config.locations = replace(config.locations, library=tmp_path)
+    monkeypatch.setattr(a, 'configuration', config)
+    monkeypatch.setattr(a, 'setting', config.get)
+    monkeypatch.setattr(a, 'credential', config.secret)
     monkeypatch.setattr(a, 'get_voice_id', lambda client: 'test-voice')
-    monkeypatch.setattr(a, 'R2_ENABLED', False)
-    monkeypatch.setattr(a, 'R2_CONFIG_ERROR', False)
+    monkeypatch.setattr(a, 'r2_enabled', lambda: False)
     monkeypatch.setattr(a, '_MODEL_INFO', {})
     monkeypatch.setattr(a, '_MODEL_CACHE', {'until':0, 'ids':[], 'error':None})
     for key in ['TEXT_MODEL','FAST_MODEL','TEXT_MODEL_OPTIONS']:

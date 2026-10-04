@@ -16,7 +16,7 @@ import uuid
 from functools import wraps
 from urllib.parse import urlsplit, urlencode
 from email.utils import format_datetime
-from filelock import FileLock, Timeout as LockTimeout
+from filelock import Timeout as LockTimeout
 from tinytag import TinyTag
 from werkzeug.exceptions import HTTPException
 import storage
@@ -27,10 +27,12 @@ from botocore.client import Config
 from elevenlabs import ElevenLabs
 from elevenlabs.types import VoiceSettings
 from flask import Flask, request, jsonify, render_template, send_from_directory, session, abort
-from dotenv import load_dotenv
+from configuration import Configuration, ConfigurationError
 from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent
-load_dotenv(BASE_DIR / ".env")
+configuration = Configuration(BASE_DIR)
+setting = configuration.get
+credential = configuration.secret
 app = Flask(__name__)
 app.config.update(
     SECRET_KEY=secrets.token_hex(32),
@@ -39,11 +41,10 @@ app.config.update(
     TRUSTED_HOSTS=["localhost", "127.0.0.1", "[::1]"],
     SESSION_COOKIE_NAME="p2p_session", SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Strict",
 )
-AUDIO_DIR = BASE_DIR / "static/audio"
-PDF_DIR = BASE_DIR / "static/pdfs"
-AUDIO_DIR.mkdir(parents=True, exist_ok=True)
-PDF_DIR.mkdir(parents=True, exist_ok=True)
-EPISODES_FILE = BASE_DIR / "static/episodes.json"
+AUDIO_DIR = configuration.locations.library / "audio"
+PDF_DIR = configuration.locations.library / "pdfs"
+configuration.prepare_library()
+EPISODES_FILE = configuration.locations.episodes
 MAX_INPUT_TOKENS = 60_000
 MAX_PROMPT_CHARS = 180_000
 TTS_LIMITS = {"eleven_flash_v2_5": 40_000, "eleven_turbo_v2_5": 40_000, "eleven_multilingual_v2": 10_000}
@@ -58,6 +59,7 @@ class UserError(Exception):
 def protect_local_app():
     if request.remote_addr not in {"127.0.0.1", "::1"}:
         abort(403, description="This app only accepts local connections.")
+    configuration.check_location()
     if request.view_args and "slug" in request.view_args:
         if not storage.valid_id(request.view_args["slug"]):
             abort(400, description="Invalid episode ID")
@@ -95,9 +97,9 @@ def handle_error(exc):
         return jsonify(error=exc.message), exc.status
     if isinstance(exc, HTTPException):
         return jsonify(error=exc.description), exc.code
-    if isinstance(exc, storage.StoreError):
+    if isinstance(exc, (storage.StoreError, ConfigurationError)):
         return jsonify(error=str(exc)), 500
-    app.logger.exception("Request failed")
+    app.logger.error("Request failed")
     return jsonify(error="Operation failed. Check the library and server log before retrying."), 500
 
 
@@ -106,7 +108,7 @@ def exclusive_mutation(fn):
     @wraps(fn)
     def wrapped(*args, **kwargs):
         try:
-            with FileLock(str(EPISODES_FILE)+".operation.lock", timeout=0):
+            with configuration.operation():
                 return fn(*args, **kwargs)
         except LockTimeout:
             raise UserError("Another operation is running. Wait for it to finish before retrying.", 409)
@@ -119,8 +121,8 @@ def configured(value):
 
 def require_keys(*names):
     for name in names:
-        if not configured(globals()[name]):
-            raise UserError(f"Set {name} in .env and restart the app before generating.")
+        if not configured(credential(name)):
+            raise UserError(f"Configure {name} before generating.")
 
 
 def provider_error(provider, exc):
@@ -138,42 +140,27 @@ def provider_error(provider, exc):
     return f"{provider}: request failed. Check the server log and provider status before retrying."
 
 
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
-ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
+def r2_state():
+    try:
+        values = [setting('R2_ACCOUNT_ID'), credential('R2_ACCESS_KEY_ID'),
+                  credential('R2_SECRET_KEY'), setting('R2_PUBLIC_URL')]
+        url = urlsplit(setting('R2_PUBLIC_URL'))
+    except (ConfigurationError, ValueError):
+        return False, True
+    enabled = all(configured(v) for v in values) and bool(setting('R2_BUCKET').strip())
+    if enabled and (url.scheme != 'https' or not url.hostname or url.username
+                    or url.query or url.fragment):
+        enabled = False
+    return enabled, bool(any(values) and not enabled)
 
-for _name, _val in (("ANTHROPIC_API_KEY", ANTHROPIC_API_KEY), ("ELEVENLABS_API_KEY", ELEVENLABS_API_KEY)):
-    if not configured(_val):
-        print(f"WARNING: {_name} is not set. Copy .env.example to .env and add it, "
-              "or episode generation will fail.", file=sys.stderr)
-ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID", "")
-OBSIDIAN_VAULT_PATH = os.getenv("OBSIDIAN_VAULT_PATH", "")
 
-# Podcast identity
-PODCAST_TITLE       = os.getenv("PODCAST_TITLE", "Paper to Podcast")
-PODCAST_DESCRIPTION = os.getenv("PODCAST_DESCRIPTION", "Academic papers turned into podcast episodes.")
-PODCAST_AUTHOR      = os.getenv("PODCAST_AUTHOR", PODCAST_TITLE)
+def r2_enabled():
+    return r2_state()[0]
 
-# Cloudflare R2
-R2_ACCOUNT_ID     = os.getenv("R2_ACCOUNT_ID", "")
-R2_ACCESS_KEY_ID  = os.getenv("R2_ACCESS_KEY_ID", "")
-R2_SECRET_KEY     = os.getenv("R2_SECRET_KEY", "")
-R2_BUCKET         = os.getenv("R2_BUCKET", "paper-to-podcast")
-R2_PUBLIC_URL     = os.getenv("R2_PUBLIC_URL", "").rstrip("/")  # e.g. https://pub-xxxx.r2.dev
 
-_r2_values = [R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_KEY, R2_PUBLIC_URL]
-R2_ENABLED = all(configured(v) for v in _r2_values) and bool(R2_BUCKET.strip())
-R2_CONFIG_ERROR = bool(any(_r2_values) and not R2_ENABLED)
-if R2_ENABLED and (urlsplit(R2_PUBLIC_URL).scheme != "https" or not urlsplit(R2_PUBLIC_URL).hostname
-                   or urlsplit(R2_PUBLIC_URL).username or urlsplit(R2_PUBLIC_URL).query or urlsplit(R2_PUBLIC_URL).fragment):
-    R2_ENABLED, R2_CONFIG_ERROR = False, True
-if R2_CONFIG_ERROR:
-    print("WARNING: R2 configuration is incomplete or contains placeholders. Clear all R2 credentials for local use, or complete them before publishing.", file=sys.stderr)
-
-# Discover within the configured family; explicit IDs pin cost and behavior.
+# Explicit IDs pin behavior/cost; discovery stays within the selected family.
 DEFAULT_TEXT_MODEL = "auto"
 DEFAULT_FAST_MODEL = "auto"
-TEXT_MODEL_FAMILY = os.getenv("TEXT_MODEL_FAMILY", "").strip().lower() or "sonnet"
-FAST_MODEL_FAMILY = os.getenv("FAST_MODEL_FAMILY", "").strip().lower() or "haiku"
 _MODEL_CACHE = {"until": 0.0, "ids": [], "error": None}
 _MODEL_CACHE_TTL = 3600
 _MODEL_LOCK = threading.Lock()
@@ -185,13 +172,19 @@ def _family(model_id):
 
 
 def claude_client(discovery=False):
-    return anthropic.Anthropic(api_key=ANTHROPIC_API_KEY,
+    return anthropic.Anthropic(api_key=credential('ANTHROPIC_API_KEY'),
+                               base_url='https://api.anthropic.com',
+                               http_client=anthropic.DefaultHttpxClient(follow_redirects=False),
                                timeout=8.0 if discovery else 120.0, max_retries=0)
 
 
 def available_models():
     with _MODEL_LOCK:
         now = time.monotonic()
+        scope = hashlib.sha256((credential('ANTHROPIC_API_KEY') or '').encode()).hexdigest()
+        if _MODEL_CACHE.get('scope') != scope:
+            _MODEL_CACHE.update(until=0, ids=[], error=None, scope=scope)
+            _MODEL_INFO.clear()
         if now >= _MODEL_CACHE["until"]:
             try:
                 require_keys("ANTHROPIC_API_KEY")
@@ -215,15 +208,15 @@ def _newest_in_family(family):
 
 
 def default_text_model():
-    return os.getenv("TEXT_MODEL", "").strip() or DEFAULT_TEXT_MODEL
+    return setting("TEXT_MODEL").strip() or DEFAULT_TEXT_MODEL
 
 
 def fast_model():
-    return os.getenv("FAST_MODEL", "").strip() or DEFAULT_FAST_MODEL
+    return setting("FAST_MODEL").strip() or DEFAULT_FAST_MODEL
 
 
 def text_model_options():
-    options = [m.strip() for m in os.getenv("TEXT_MODEL_OPTIONS", "").split(",") if m.strip()]
+    options = [m.strip() for m in setting("TEXT_MODEL_OPTIONS").split(",") if m.strip()]
     return list(dict.fromkeys([default_text_model()] + options))
 
 
@@ -232,8 +225,8 @@ def resolve_models(form):
     if writing not in text_model_options():
         raise UserError("Select a configured writing model.")
     fast = fast_model()
-    writing = _newest_in_family(TEXT_MODEL_FAMILY) if writing == "auto" else writing
-    fast = _newest_in_family(FAST_MODEL_FAMILY) if fast == "auto" else fast
+    writing = _newest_in_family((setting('TEXT_MODEL_FAMILY').strip().lower() or 'sonnet')) if writing == "auto" else writing
+    fast = _newest_in_family((setting('FAST_MODEL_FAMILY').strip().lower() or 'haiku')) if fast == "auto" else fast
     try:
         with claude_client(discovery=True) as client:
             # Retrieve also resolves aliases. No generation charge for these checks.
@@ -590,7 +583,7 @@ def generate_podcast_script(paper_text, notes="", target_words=None, model=None,
     except Exception:
         if warnings is None:
             raise
-        app.logger.exception('Voice editing failed; first-pass script preserved')
+        app.logger.error('Voice editing failed; first-pass script preserved')
         warnings.append('Voice editing failed. First-pass script saved for review; check it before voicing.')
         return draft
 
@@ -614,9 +607,9 @@ def generate_show_notes(paper_text, title, authors, model, usage):
 
 def get_voice_id(client: ElevenLabs) -> str:
     """Use the configured voice ID, or fall back to the first voice in the account."""
-    if ELEVENLABS_VOICE_ID:
-        client.voices.get(ELEVENLABS_VOICE_ID)
-        return ELEVENLABS_VOICE_ID
+    if setting('ELEVENLABS_VOICE_ID'):
+        client.voices.get(setting('ELEVENLABS_VOICE_ID'))
+        return setting('ELEVENLABS_VOICE_ID')
     voices = client.voices.get_all()
     if not voices.voices:
         raise RuntimeError("No voices found in your ElevenLabs account.")
@@ -631,7 +624,8 @@ def text_to_speech(script, filename, model_id="eleven_flash_v2_5"):
         raise UserError(f"Script has {len(script):,} characters; {model_id} allows {TTS_LIMITS[model_id]:,}. Shorten it or select Flash. Draft preserved.")
     if Path(filename).name != filename or not re.fullmatch(r"[\w-]+\.mp3", filename):
         raise UserError("Invalid audio filename.")
-    client = ElevenLabs(api_key=ELEVENLABS_API_KEY, timeout=120)
+    client = ElevenLabs(api_key=credential('ELEVENLABS_API_KEY'),
+                       base_url='https://api.elevenlabs.io', follow_redirects=False, timeout=120)
     voice_id = get_voice_id(client)
     audio_iter = client.text_to_speech.convert(voice_id=voice_id, text=script, model_id=model_id,
         output_format="mp3_44100_128", voice_settings=VoiceSettings(stability=.35,
@@ -661,9 +655,9 @@ def get_audio_duration(path):
 def get_r2_client():
     return boto3.client(
         "s3",
-        endpoint_url=f"https://{R2_ACCOUNT_ID}.r2.cloudflarestorage.com",
-        aws_access_key_id=R2_ACCESS_KEY_ID,
-        aws_secret_access_key=R2_SECRET_KEY,
+        endpoint_url=f"https://{setting('R2_ACCOUNT_ID')}.r2.cloudflarestorage.com",
+        aws_access_key_id=credential('R2_ACCESS_KEY_ID'),
+        aws_secret_access_key=credential('R2_SECRET_KEY'),
         config=Config(signature_version="s3v4", connect_timeout=10, read_timeout=30, retries={"max_attempts": 1}),
         region_name="auto",
     )
@@ -674,11 +668,11 @@ def upload_to_r2(local_path: Path, key: str, content_type: str = "audio/mpeg") -
     client = get_r2_client()
     client.upload_file(
         str(local_path),
-        R2_BUCKET,
+        setting('R2_BUCKET'),
         key,
         ExtraArgs={"ContentType": content_type},
     )
-    return f"{R2_PUBLIC_URL}/{key}"
+    return f"{setting('R2_PUBLIC_URL')}/{key}"
 
 
 def load_episodes():
@@ -707,13 +701,13 @@ def build_rss(episodes):
         el = ET.SubElement(parent, tag)
         el.text = xml_text(text)
         return el
-    node(channel, 'title', PODCAST_TITLE)
-    node(channel, 'description', PODCAST_DESCRIPTION)
-    node(channel, 'link', R2_PUBLIC_URL)
+    node(channel, 'title', setting('PODCAST_TITLE'))
+    node(channel, 'description', setting('PODCAST_DESCRIPTION'))
+    node(channel, 'link', setting('R2_PUBLIC_URL'))
     node(channel, 'language', 'en')
     node(channel, 'lastBuildDate', format_datetime(datetime.datetime.now(datetime.timezone.utc)))
-    node(channel, '{'+itunes+'}author', PODCAST_AUTHOR)
-    ET.SubElement(channel, '{'+itunes+'}image', href=R2_PUBLIC_URL+'/images/logo.png')
+    node(channel, '{'+itunes+'}author', setting('PODCAST_AUTHOR'))
+    ET.SubElement(channel, '{'+itunes+'}image', href=setting('R2_PUBLIC_URL')+'/images/logo.png')
     ET.SubElement(channel, '{'+itunes+'}category', text='Education')
     node(channel, '{'+itunes+'}explicit', 'false')
     for ep in episodes:
@@ -750,10 +744,10 @@ def build_rss(episodes):
 
 
 def publish_feed(episodes=None, before_upload=None):
-    if not R2_ENABLED:
+    if not r2_enabled():
         raise UserError('Configure R2 before publishing.')
     feed = build_rss(load_episodes() if episodes is None else episodes)
-    feed_path = BASE_DIR / 'static/feed.xml'
+    feed_path = EPISODES_FILE.parent / 'feed.xml'
     storage.atomic_write(feed_path, feed.encode('utf-8'))
     if before_upload is not None:
         before_upload()
@@ -768,7 +762,7 @@ def local_audio_path(ep):
 
 
 def r2_location():
-    return {'account': R2_ACCOUNT_ID, 'bucket': R2_BUCKET}
+    return {'account': setting('R2_ACCOUNT_ID'), 'bucket': setting('R2_BUCKET')}
 
 
 def remote_audio_keys(ep):
@@ -782,7 +776,7 @@ def remote_audio_keys(ep):
         # Legacy records have no account identity: require the original public URL
         # until the maintainer explicitly adopts the current bucket in the UI.
         url = urlsplit(ep['r2_url'])
-        if location is None and not ep['r2_url'].startswith(R2_PUBLIC_URL+'/audio/'):
+        if location is None and not ep['r2_url'].startswith(setting('R2_PUBLIC_URL')+'/audio/'):
             raise UserError('Legacy R2 ownership is unknown. Use Adopt R2 location after verifying this account and bucket contain the original audio.')
         keys.append(url.path.lstrip('/'))
     if any(not isinstance(key, str) or not re.fullmatch(r'audio/[\w-]*\.mp3', key) for key in keys):
@@ -792,7 +786,7 @@ def remote_audio_keys(ep):
 
 def publish_episode(ep):
     """Retry publishing existing audio without any model/TTS call."""
-    if not R2_ENABLED:
+    if not r2_enabled():
         raise UserError('Complete the R2 configuration before publishing.')
     if ep.get('delete_pending'):
         raise UserError('Deletion is pending. Retry Delete to finish cleanup.')
@@ -814,9 +808,9 @@ def publish_episode(ep):
 
 
 def save_to_obsidian(ep):
-    if not OBSIDIAN_VAULT_PATH.strip():
+    if not setting('OBSIDIAN_VAULT_PATH').strip():
         return False
-    vault = Path(OBSIDIAN_VAULT_PATH).expanduser()
+    vault = Path(setting('OBSIDIAN_VAULT_PATH')).expanduser()
     if not vault.is_dir():
         raise UserError('Obsidian vault does not exist.')
     metadata = {'title': ep['title'], 'date': ep['date'][:10], 'source': ep['pdf_name'],
@@ -851,19 +845,19 @@ def save_to_obsidian(ep):
 def finish_optional(ep):
     warnings = list(ep.get('warnings', []))
     published, obsidian = False, False
-    if R2_ENABLED:
+    if r2_enabled():
         try:
             ep = publish_episode(ep)
             published = True
         except Exception:
-            app.logger.exception('Publishing failed')
+            app.logger.error('Publishing failed')
             warnings.append('Audio saved locally; publishing failed. Use Publish / retry in the library; no generation charge.')
-    elif R2_CONFIG_ERROR:
+    elif r2_state()[1]:
         warnings.append('Audio saved locally. R2 configuration is incomplete; clear or complete its settings.')
     try:
         obsidian = save_to_obsidian(ep)
     except Exception:
-        app.logger.exception('Obsidian save failed')
+        app.logger.error('Obsidian save failed')
         warnings.append('Obsidian save failed. Local episode is safe; check the vault path.')
     return dict(ep, warnings=warnings, audio_ready=True, feed_published=published, obsidian_saved=obsidian)
 
@@ -894,12 +888,17 @@ def index():
 
 @app.route('/library')
 def library():
-    return render_template('library.html', episodes=load_episodes(), r2_enabled=R2_ENABLED)
+    return render_template('library.html', episodes=load_episodes(), r2_enabled=r2_enabled())
 
 
 @app.route('/episodes.json')
 def episodes_json():
     return jsonify(load_episodes())
+
+
+@app.route('/static/logo.png')
+def serve_logo():
+    return send_from_directory(EPISODES_FILE.parent, 'logo.png')
 
 
 @app.route('/static/audio/<path:filename>')
@@ -978,7 +977,7 @@ def _prepare_episode(req):
     except UserError:
         raise
     except Exception as exc:
-        app.logger.exception('Script generation failed')
+        app.logger.error('Script generation failed')
         raise UserError(provider_error('Anthropic', exc), 502) from exc
     # Persist the paid script first. Failure of optional passes cannot lose it.
     slug = uuid.uuid4().hex
@@ -1007,7 +1006,7 @@ def _prepare_episode(req):
             if name == 'metadata': ep.update(result)
             else: ep[name.replace(' ', '_')] = result
         except Exception:
-            app.logger.exception('%s generation failed', name)
+            app.logger.error('%s generation failed', name)
             warnings.append(f'{name.capitalize()} failed; script is saved and can still be voiced.')
     ep.update(warnings=warnings, usage=usage)
     return storage.update(EPISODES_FILE, slug, ep)
@@ -1024,7 +1023,8 @@ def generate_script_only():
 def generate():
     require_keys('ELEVENLABS_API_KEY')
     try:
-        get_voice_id(ElevenLabs(api_key=ELEVENLABS_API_KEY, timeout=15))
+        get_voice_id(ElevenLabs(api_key=credential('ELEVENLABS_API_KEY'),
+                       base_url='https://api.elevenlabs.io', follow_redirects=False, timeout=15))
     except Exception as exc:
         raise UserError(provider_error('ElevenLabs voice check', exc), 502) from exc
     ep = _prepare_episode(request)
@@ -1033,7 +1033,7 @@ def generate():
     try:
         return jsonify(voice_episode(ep, ep['tts_model']))
     except Exception as exc:
-        app.logger.exception('Voicing failed; draft preserved')
+        app.logger.error('Voicing failed; draft preserved')
         error = exc.message if isinstance(exc, UserError) else provider_error('ElevenLabs', exc)
         # Return the saved draft for a voice-only retry, never ask to regenerate the script.
         return jsonify(error=error, draft=ep, audio_ready=False), 502
@@ -1053,7 +1053,7 @@ def regenerate_audio(slug):
     except (UserError, storage.StoreError):
         raise
     except Exception as exc:
-        app.logger.exception('Voicing failed')
+        app.logger.error('Voicing failed')
         raise UserError(provider_error('ElevenLabs', exc), 502) from exc
 
 
@@ -1064,7 +1064,7 @@ def refresh_feed_after_edit(ep):
             publish_feed()
             storage.update(EPISODES_FILE, ep['slug'], {'feed_published': True})
         except Exception:
-            app.logger.exception('Feed update failed')
+            app.logger.error('Feed update failed')
             warnings.append('Local edit saved; feed update failed. Use Publish / retry in the library.')
     return warnings
 
@@ -1100,7 +1100,7 @@ def retry_publish(slug):
     except UserError:
         raise
     except Exception:
-        app.logger.exception('Publishing failed')
+        app.logger.error('Publishing failed')
         raise UserError('Publishing failed; local audio is safe. Check R2 configuration and retry.', 502)
 
 
@@ -1108,7 +1108,7 @@ def retry_publish(slug):
 @exclusive_mutation
 def adopt_r2(slug):
     ep = find_episode(slug)
-    if not R2_ENABLED or ep.get('r2_location') or not ep.get('r2_url'):
+    if not r2_enabled() or ep.get('r2_location') or not ep.get('r2_url'):
         raise UserError('Only legacy published episodes can adopt a configured R2 location.')
     candidate = dict(ep, r2_location=r2_location())
     keys = remote_audio_keys(candidate)
@@ -1130,14 +1130,14 @@ def adopt_r2(slug):
         if (not expected_size or not path.is_file() or path.is_symlink()
                 or path.stat().st_size != expected_size):
             raise UserError('Restore the matching original local audio before adopting this episode.')
-        head = client.head_object(Bucket=R2_BUCKET, Key=key)
+        head = client.head_object(Bucket=setting('R2_BUCKET'), Key=key)
         if head.get('ContentLength') != expected_size:
             raise UserError('R2 audio size does not match this episode. Adoption refused.')
         local_hash = hashlib.sha256()
         with path.open('rb') as stream:
             for chunk in iter(lambda: stream.read(1024*1024), b''):
                 local_hash.update(chunk)
-        response = client.get_object(Bucket=R2_BUCKET, Key=key)
+        response = client.get_object(Bucket=setting('R2_BUCKET'), Key=key)
         body = response['Body']
         remote_hash = hashlib.sha256()
         remaining = expected_size
@@ -1167,7 +1167,7 @@ def delete_episode(slug):
     keys = []
     remote = ep.get('r2_url') or ep.get('remote_keys') or ep.get('published')
     if remote:
-        if not R2_ENABLED:
+        if not r2_enabled():
             raise UserError('This episode was published. Restore its R2 configuration to delete remote audio and update the feed.')
         keys = remote_audio_keys(ep)
         shared = set()
@@ -1186,9 +1186,9 @@ def delete_episode(slug):
             publish_feed([e for e in load_episodes() if e['slug'] != slug],
                          before_upload=lambda: storage.update(EPISODES_FILE, slug, {'delete_pending': True}))
             for key in set(keys):
-                get_r2_client().delete_object(Bucket=R2_BUCKET, Key=key)
+                get_r2_client().delete_object(Bucket=setting('R2_BUCKET'), Key=key)
         except Exception as exc:
-            app.logger.exception('Remote deletion incomplete')
+            app.logger.error('Remote deletion incomplete')
             raise UserError('Remote deletion incomplete. Local episode retained; restore/check R2 settings and retry.', 502) from exc
     if not remote:
         storage.update(EPISODES_FILE, slug, {'delete_pending': True})
@@ -1202,4 +1202,4 @@ def delete_episode(slug):
 
 
 if __name__ == '__main__':
-    app.run(host='127.0.0.1', port=5050, debug=os.getenv('FLASK_DEBUG') == '1')
+    app.run(host='127.0.0.1', port=5050, debug=setting('FLASK_DEBUG') == '1')

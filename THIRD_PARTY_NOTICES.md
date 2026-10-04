@@ -14,6 +14,9 @@ Direct core dependencies, verified from the installed distributions:
 | boto3 | Apache-2.0 |
 | TinyTag | MIT |
 | filelock | MIT |
+| platformdirs | MIT |
+| keyring | MIT |
+| tomli / tomli-w | MIT |
 
 Transitive dependencies retain their own notices in their installed distributions. In particular, Certifi uses MPL-2.0 (file-level copyleft); the other inspected transitive runtime licenses are MIT, BSD, Apache-2.0, PSF-2.0 or combinations of those licenses. Retain those notices when redistributing dependencies; this inventory does not replace their license texts. pytest and its development dependencies are not required to run the app.
 
