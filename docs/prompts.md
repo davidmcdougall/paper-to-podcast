@@ -9,9 +9,11 @@ System instructions and metadata schema validation remain in Python. No dependen
 The first text-generating operation or backend access seeds editable copies in
 `<user data>/prompts/`. The data location comes from Configuration (`platformdirs`
 or `P2P_DATA_DIR`), independent of the selected episode library. A versioned JSON
-`.seeded` file records each template's seeded-default SHA-256. On later access,
-an editable copy matching its seeded hash receives a newer shipped default;
-both old and new bytes are archived before replacing it. Custom edits remain
+`.seeded` file records each template's seeded-default SHA-256 after stripping
+trailing whitespace. Upgrade comparisons use the same normalization, so saving
+an unchanged default with an editor-added newline does not opt out of upgrades.
+History hashes still cover exact raw bytes. On later access, a matching editable
+copy receives a newer shipped default; both old and new bytes are archived before replacing it. Custom edits remain
 unchanged. Reset opts the template back into future default upgrades.
 
 The original `1\n` marker migrates conservatively: copies identical to current
@@ -21,7 +23,10 @@ versions refuse rewriting. A missing or invalid editable file uses the shipped
 default and reports the specific reason; it is not silently repaired. A corrupt
 immutable archive blocks only the affected template's reuse. For example,
 corrupt metadata history prevents the optional metadata pass but preserves the
-paid script, and it cannot block episode deletion or publishing.
+paid script, and it cannot block episode deletion or publishing. The saved
+episode's warnings include the template-specific error and repair instruction.
+An unavailable script or voice-edit template stops generation before provider
+access; runtime voice-edit provider failures still preserve the paid first draft.
 
 Templates are plain text, limited to 32,000 UTF-8 bytes. Each has these required
 literal placeholders (no expressions, conversions, format specifiers or other

@@ -35,6 +35,11 @@ def digest(data):
     return hashlib.sha256(data).hexdigest()
 
 
+def default_digest(raw):
+    # Upgrade eligibility ignores editor-added trailing whitespace; history does not.
+    return digest(raw.decode('utf-8').rstrip().encode('utf-8'))
+
+
 def validate(name, raw):
     if name not in REQUIRED:
         raise PromptError('Unknown prompt name.')
@@ -137,7 +142,7 @@ class PromptStore:
             for name in REQUIRED:
                 path = self.root / (name + '.md')
                 default = self._default(name)
-                defaults[name] = digest(default) if path.exists() and path.read_bytes() == default else None
+                defaults[name] = default_digest(default) if path.exists() and path.read_bytes() == default else None
             state = {'schema_version': 1, 'defaults': defaults}
             self._write_seed(state)
             return state
@@ -147,7 +152,7 @@ class PromptStore:
             default = self._default(name)
             if not path.exists():
                 storage.atomic_write(path, default)
-            defaults[name] = digest(default) if path.read_bytes() == default else None
+            defaults[name] = default_digest(default) if path.read_bytes() == default else None
         state = {'schema_version': 1, 'defaults': defaults}
         self._write_seed(state)
         return state
@@ -175,16 +180,17 @@ class PromptStore:
                     warning = f'{name} prompt missing or invalid: {reason} Shipped default used; repair or reset the editable prompt.'
                 error = ''
                 try:
-                    sha = digest(raw)
-                    if not reason and sha == state['defaults'][name] and raw != default:
+                    if (not reason and default_digest(raw) == state['defaults'][name]
+                            and default_digest(raw) != default_digest(default)):
                         # Archive both versions before replacing an untouched copy.
                         self._archive(name, raw)
                         self._archive(name, default)
                         storage.atomic_write(self.root / (name + '.md'), default)
                         raw = default
                     self._archive(name, raw)
-                    if not reason and raw == default and state['defaults'][name] != digest(default):
-                        state['defaults'][name] = digest(default)
+                    if (not reason and default_digest(raw) == default_digest(default)
+                            and state['defaults'][name] != default_digest(default)):
+                        state['defaults'][name] = default_digest(default)
                         self._write_seed(state)
                 except PromptError as exc:
                     # A corrupt version blocks only this template's reuse. Other
@@ -205,8 +211,8 @@ class PromptStore:
                 self._archive(name, previous)
             sha = self._archive(name, raw)
             storage.atomic_write(path, raw)
-            if raw == self._default(name):
-                state['defaults'][name] = sha
+            if default_digest(raw) == default_digest(self._default(name)):
+                state['defaults'][name] = default_digest(raw)
                 self._write_seed(state)
         return sha
 

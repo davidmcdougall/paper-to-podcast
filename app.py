@@ -404,6 +404,14 @@ def prompt_snapshot():
     return configuration.prompt_snapshot()
 
 
+def script_prompt_snapshot():
+    templates = prompt_snapshot()
+    for name in ('script', 'voice_edit'):
+        if templates[name].error:
+            raise PromptError(templates[name].error)
+    return templates
+
+
 def complete_message(model, prompt, max_tokens, usage, *, source=None, warnings=None,
                      source_word_limit=None, template=None, inputs=None, validator=None):
     record = None
@@ -522,7 +530,7 @@ def generate_podcast_script(paper_text, notes="", target_words=None, model=None,
         length_rule = "500–2500 words, as the substance warrants; never pad to fill time"
     else:
         length_rule = f"{max(150, round(target_words*.85))}–{round(target_words*1.15)} words"
-    templates = prompt_snapshot()
+    templates = script_prompt_snapshot()
     inputs = dict(length_rule=length_rule, notes=notes, source=text)
     prefix = templates['script'].prefix(length_rule=length_rule, notes=notes)
     draft = complete_message(model, prefix, int(budget_words*1.8)+1500, usage,
@@ -902,7 +910,7 @@ def json_body():
 
 
 def _prepare_episode(req):
-    prompt_snapshot()  # Freeze templates before any input/provider network access.
+    templates = script_prompt_snapshot()  # Preflight before input/provider network access.
     require_keys('ANTHROPIC_API_KEY')
     # Check the store before incurring any provider charges.
     load_episodes()
@@ -933,7 +941,8 @@ def _prepare_episode(req):
     operation = configuration._operation.get()
     if operation is not None:
         operation.source = AttemptJournal(configuration.locations.data).archive_input(paper_text)
-    warnings = [template.warning for template in prompt_snapshot().values() if template.warning]
+    warnings = [message for template in templates.values()
+                for message in (template.warning, template.error) if message]
     usage = []
     if arxiv_id and not title:
         try:
@@ -996,7 +1005,7 @@ def generate_script_only():
 @app.route('/generate', methods=['POST'])
 @exclusive_mutation
 def generate():
-    prompt_snapshot()
+    script_prompt_snapshot()
     require_keys('ELEVENLABS_API_KEY')
     try:
         get_voice_id(ElevenLabs(api_key=credential('ELEVENLABS_API_KEY'),

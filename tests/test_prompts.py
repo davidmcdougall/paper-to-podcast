@@ -443,3 +443,75 @@ def test_corrupt_seed_marker_refuses_rewrite(store,content):
     store.snapshot();marker=store.root/'.seeded';marker.write_bytes(content)
     with pytest.raises(PromptError,match='corrupt or unsupported'):store.snapshot()
     assert marker.read_bytes()==content
+
+
+@pytest.mark.parametrize('name',['summary','metadata','show_notes'])
+def test_optional_prompt_error_is_visible_in_saved_episode(appmod,client,pdf,monkeypatch,name):
+    store=PromptStore(appmod.configuration.locations.data)
+    template=store.snapshot()[name]
+    (store.history_root/name/(template.sha256+'.md')).write_bytes(b'corrupt')
+    responses=['Draft','Edited']
+    if name!='summary':responses.append('Summary')
+    if name!='metadata':responses.append('{"authors":[],"topics":[]}')
+    if name!='show_notes':responses.append('Notes')
+    mock_claude(appmod,monkeypatch,responses)
+    response=client.post('/generate-script',data={'pdf':(io.BytesIO(pdf),'paper.pdf')})
+    assert response.status_code==200
+    expected=f'{name} prompt unavailable: Prompt history is corrupt; original preserved for repair.'
+    assert expected in response.json['warnings']
+    assert expected in appmod.load_episodes()[0]['warnings']
+
+
+@pytest.mark.parametrize('route',['/generate-script','/generate'])
+def test_broken_voice_prompt_fails_before_any_provider_call(appmod,client,pdf,monkeypatch,route):
+    store=PromptStore(appmod.configuration.locations.data)
+    template=store.snapshot()['voice_edit']
+    path=store.history_root/'voice_edit'/(template.sha256+'.md')
+    path.write_bytes(b'corrupt')
+    monkeypatch.setattr(appmod,'claude_client',lambda *a,**k:pytest.fail('must not spend'))
+    monkeypatch.setattr(appmod,'resolve_models',lambda *a,**k:pytest.fail('must not discover'))
+    monkeypatch.setattr(appmod,'ElevenLabs',lambda *a,**k:pytest.fail('must not list voices'))
+    response=client.post(route,data={'pdf':(io.BytesIO(pdf),'paper.pdf')})
+    assert response.status_code==500
+    assert 'voice_edit prompt unavailable: Prompt history is corrupt' in response.json['error']
+    assert appmod.load_episodes()==[]
+    assert path.read_bytes()==b'corrupt'
+
+
+@pytest.mark.parametrize('ending',['\n','\r\n',' \t\n\n'])
+@pytest.mark.parametrize('method',['editor','backend'])
+def test_whitespace_only_editor_save_still_gets_default_upgrade(store,tmp_path,ending,method):
+    original=store.snapshot()['summary']
+    edited=original.raw+ending.encode()
+    if method=='editor':
+        (store.root/'summary.md').write_bytes(edited)
+    else:
+        store.save('summary',edited.decode())
+    unchanged=store.snapshot()['summary']
+    assert unchanged.raw==edited
+    shipped=tmp_path/'new-release';shipped.mkdir()
+    for name in REQUIRED:(shipped/(name+'.md')).write_bytes(store._default(name))
+    (shipped/'summary.md').write_bytes(b'Better summary instructions for {title}\n{source}')
+    upgraded=PromptStore(tmp_path,shipped)
+    current=upgraded.snapshot()['summary']
+    assert current.raw==b'Better summary instructions for {title}\n{source}'
+    assert upgraded.historical('summary',unchanged.sha256)==edited
+    assert upgraded.historical('summary',original.sha256)==original.raw
+
+
+
+def test_default_with_final_newline_tracks_normalized_seed_for_next_upgrade(tmp_path):
+    from prompts import default_digest
+    shipped=tmp_path/'release-one';shipped.mkdir()
+    original_store=PromptStore(tmp_path/'original')
+    for name in REQUIRED:(shipped/(name+'.md')).write_bytes(original_store._default(name))
+    (shipped/'metadata.md').write_bytes(b'First release instructions\n{source}\n')
+    store=PromptStore(tmp_path/'user-data',shipped)
+    first=store.snapshot()['metadata']
+    marker=json.loads((store.root/'.seeded').read_text(encoding='utf-8'))
+    assert marker['defaults']['metadata']==default_digest(first.raw)
+    store.save('metadata',first.raw.decode()+' \t\n')
+    edited=store.snapshot()['metadata']
+    (shipped/'metadata.md').write_bytes(b'Improved release instructions\n{source}\n')
+    assert store.snapshot()['metadata'].raw==b'Improved release instructions\n{source}\n'
+    assert store.historical('metadata',edited.sha256)==edited.raw
