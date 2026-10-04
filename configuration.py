@@ -55,6 +55,9 @@ class Settings:
 @dataclass
 class Operation:
     settings: Settings
+    prompts: Mapping = field(default_factory=dict)
+    attempts: list = field(default_factory=list)
+    source: Mapping = field(default_factory=dict)
     # Resolved lazily; never serialized, logged or included in repr.
     secrets: dict = field(default_factory=dict, repr=False)
 
@@ -219,7 +222,8 @@ class Configuration:
         self.locations.library.mkdir(parents=True, exist_ok=True)
         with FileLock(str(self.locations.episodes) + '.operation.lock', timeout=0):
             self.check_location()
-            state = Operation(self.snapshot())
+            from prompts import PromptStore
+            state = Operation(self.snapshot(), PromptStore(self.locations.data).snapshot())
             token = self._operation.set(state)
             try:
                 yield
