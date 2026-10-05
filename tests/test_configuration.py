@@ -332,6 +332,12 @@ def forbidden(*args, **kwargs):
 socket.socket.connect = forbidden
 socket.create_connection = forbidden
 credential_store.native_keychain = forbidden
+# This checkout may contain a real legacy .env; keep startup isolated too.
+import configuration
+from pathlib import Path
+import os
+original = configuration.Configuration
+configuration.Configuration = lambda base: original(Path(os.environ['P2P_DATA_DIR']) / 'empty-install')
 import app
 client = app.app.test_client()
 assert client.get('/').status_code == 200
@@ -359,7 +365,8 @@ def test_anthropic_sdk_cannot_forward_key_to_env_endpoint_or_redirect(appmod, mo
         calls.append(str(request.url))
         return httpx2.Response(302, headers={'Location':'https://different.test/models'})
     monkeypatch.setenv('ANTHROPIC_BASE_URL', 'https://different.test')
-    monkeypatch.setattr(appmod.anthropic, 'DefaultHttpxClient',
+    from providers.anthropic import anthropic
+    monkeypatch.setattr(anthropic, 'DefaultHttpxClient',
                         lambda **kw: httpx2.Client(transport=httpx2.MockTransport(transport), **kw))
     with appmod.claude_client() as client:
         with pytest.raises(Exception):
