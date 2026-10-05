@@ -55,6 +55,9 @@ class Settings:
 @dataclass
 class Operation:
     settings: Settings
+    prompts: Mapping | None = None
+    attempts: list = field(default_factory=list)
+    source: Mapping = field(default_factory=dict)
     # Resolved lazily; never serialized, logged or included in repr.
     secrets: dict = field(default_factory=dict, repr=False)
 
@@ -210,6 +213,15 @@ class Configuration:
         if name not in operation.secrets:
             operation.secrets[name] = self.credentials.resolve(name)
         return operation.secrets[name]
+
+    def prompt_snapshot(self):
+        from prompts import PromptStore
+        operation = self._operation.get()
+        if operation is None:
+            return PromptStore(self.locations.data).snapshot()
+        if operation.prompts is None:
+            operation.prompts = PromptStore(self.locations.data).snapshot()
+        return operation.prompts
 
     @contextmanager
     def operation(self):

@@ -44,3 +44,7 @@ static/episodes.json.migration.*.bak
 settings.toml
 settings.toml.bak
 secrets.json
+
+# Runtime prompt edits and generation history (if data storage is the checkout)
+/prompts/
+/generation-history/

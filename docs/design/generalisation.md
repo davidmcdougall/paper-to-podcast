@@ -1,6 +1,6 @@
 # Generalisation: design for approval
 
-2026-10-03 · Baseline: merged `2e4c787` · Status: revised after review; PR-A approved.
+2026-10-03 · Baseline: merged `2e4c787` · Status: PR-A merged; PR-B implementation authorized on 2026-10-04.
 
 **Goal:** install once, configure and edit prompts in the browser, retain existing libraries. Release with Anthropic and ElevenLabs first. Keep the app local and single-user; no hosting, accounts, billing system, plugin framework or desktop wrapper. The two Stage 0 fixes are already merged. Verified: 87 local tests pass; reviewed and merged trees match.
 
@@ -18,7 +18,7 @@ Snapshot settings and prompts at operation start. Resolve credentials when neede
 
 ## 2. Prompts and outputs
 
-Extract five immutable shipped Markdown templates: script, voice edit, summary, show notes and metadata. Preserve current rendered requests in regression fixtures. Seed editable copies once; upgrades never overwrite edits. Allow only documented literal placeholders (`length_rule`, `notes`, `source`, `script`, `title`, `authors`), with required fields per template; no executable templating. Require `{source}` exactly once, at the end of source-bearing templates. Reject invalid saves; missing or externally edited invalid files fall back to defaults with a warning and regression coverage. System instructions and metadata JSON schema remain in code. Enforce finished responses, non-empty text, valid metadata JSON and escaped output; “no invented citations” and “script only” remain editorial guidance, not guarantees.
+Extract five immutable shipped Markdown templates: script, voice edit, summary, show notes and metadata. Preserve current rendered requests in regression fixtures. Seed editable copies with per-template default hashes; upgrade untouched defaults while archiving both versions, and never overwrite custom edits. Allow only documented literal placeholders (`length_rule`, `notes`, `source`, `script`, `title`, `authors`), with required fields per template; no executable templating. Require `{source}` exactly once, at the end of source-bearing templates. Reject invalid saves; missing or externally edited invalid files fall back to defaults with a warning and regression coverage. System instructions and metadata JSON schema remain in code. Enforce finished responses, non-empty text, valid metadata JSON and escaped output; “no invented citations” and “script only” remain editorial guidance, not guarantees.
 
 Settings provides editing, save, reset, history and offline Preview against a bundled sample, with a clearly labelled token estimate and no provider call. Archive exact template bytes under their SHA-256 hash. Record template hash, non-secret parameters, model, sampling version and source hash per step/attempt, including retries; large source/script values use references and hashes. Exact regeneration is not promised. Retries retain prior records and take new snapshots.
 
@@ -52,4 +52,4 @@ Build the uv installer and entry point; uv installs/manages Python and locked de
 
 **Acceptance:** mocked providers only; no paid calls or publication. Preserve all security, atomic storage, corruption refusal, IDs, saved drafts, versioned audio and retry guarantees. Test precedence, keychain failure, endpoint isolation, prompt fallback/history and operation snapshots. Verify upgrades/moves preserve library, media, settings and edited prompts by counts/hashes. On macOS/Windows with Python 3.10/3.13, test install/reinstall, start, first-run redirect/checklist, mocked Short script, shutdown, failed update and reinstalling the previous pinned version. Mocks cannot verify live permissions, sound quality or OS security prompts. A maintainer Short episode and scratch R2 publish/delete before release require separate, bounded authorization; record results in release notes.
 
-**Decision:** Revised note approved; implement PR-A only and stop for review.
+**Decision:** PR-A merged as `340bd82`. PR-B (prompt storage/history) authorized on 2026-10-04; open it for review and stop unmerged before PR-C. Browser editing remains in PR-F.

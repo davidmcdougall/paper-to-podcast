@@ -1,0 +1,2 @@
+# Shipped prompt bytes must be identical across checkouts on every OS.
+prompt_templates/*.md text eol=lf

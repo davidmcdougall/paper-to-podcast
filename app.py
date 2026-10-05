@@ -20,6 +20,7 @@ from filelock import Timeout as LockTimeout
 from tinytag import TinyTag
 from werkzeug.exceptions import HTTPException
 import storage
+from prompts import PromptError, AttemptJournal, input_reference, SAMPLING_VERSIONS
 from pdf_text import MAX_PDF_BYTES
 import anthropic
 import boto3
@@ -107,7 +108,7 @@ def handle_error(exc):
         return jsonify(error=exc.message), exc.status
     if isinstance(exc, HTTPException):
         return jsonify(error=exc.description), exc.code
-    if isinstance(exc, (storage.StoreError, ConfigurationError)):
+    if isinstance(exc, (storage.StoreError, ConfigurationError, PromptError)):
         return jsonify(error=str(exc)), 500
     log_failure("Request failed")
     return jsonify(error="Operation failed. Check the library and server log before retrying."), 500
@@ -279,145 +280,6 @@ def resolve_target_words(form):
     return LENGTH_PRESETS.get(length, LENGTH_PRESETS["standard"])
 
 
-PODCAST_PROMPT = """You are writing a solo podcast episode on an academic paper. The style is intellectually intense, fast-moving, and substantive: a smart researcher thinking aloud, not a host performing surprise.
-
-Write for a listener who already knows the broad field. Do not explain the discipline. No NPR-style setup, fake suspense, or throat-clearing. Open with the paper's core finding or central claim in the first sentence.
-
-STEP ONE — identify the paper type and adapt accordingly:
-- Empirical paper: finding, design, result, mechanism, external validity
-- Benchmark paper: what is being measured, why prior evaluations missed it, what changes if the benchmark is right
-- Methods paper: what the method makes possible, what assumptions it relies on, where it fails
-- Theory paper: core distinction, what it explains better than rival frames, what would test it
-- Review paper: map of the field, live disagreement, hidden synthesis
-- Position paper: strongest claim, weakest premise, consequence if the authors are right
-
-STEP TWO — before writing, identify the episode's central tension. The script should feel like one argument unfolding, not a sequence of smart observations. That tension should appear early and return at the end.
-
-OPENING: The very first sentence must name the paper and its authors.
-- 1–3 authors: use each author's full name exactly as it appears in the paper. Example: "Today we're looking at 'Adaptive Experimentation in the Real World' by Erik Snowberg and Leeat Yariv."
-- 4 or more authors: name only the first author and add "and colleagues." Example: "Today we're looking at 'Scaling Laws for Neural Language Models' by Jared Kaplan and colleagues."
-- On the first mention of any author anywhere in the script, always use their full name. Surname only on all subsequent mentions.
-
-STRUCTURE: 70% paper content, 30% critical reach.
-
-Paper content section:
-- Do not follow the paper's section order. Reconstruct the argument in the order a smart listener needs: result, setup, test, mechanism, implication.
-- Cover the specific experiments, arguments, controls, numbers, and conditions that matter.
-- Include methods only when they change how much we should believe the result.
-- Every number should answer "compared to what?" No orphan statistics.
-- Every sentence adds a new fact, distinction, mechanism, or inference. Do not summarise passively — think through the finding.
-
-Analytical section — use the paper type identified in STEP ONE to select the right moves. Do not use all of them; choose the one or two that cut deepest for this specific paper.
-
-Empirical paper: Name the hidden assumption in the design or sample. State what the result would mean if the mechanism generalised beyond the study context. Name the strongest alternative explanation the data cannot rule out.
-
-Benchmark paper: Show what practitioner behaviour changes if this benchmark is adopted. Identify what the benchmark cannot measure even in principle. Name the domain where its assumptions break hardest.
-
-Methods paper: State what the method makes possible that was previously intractable. Identify the cheapest way to break it. Say whether the gain over existing methods is marginal or categorical.
-
-Theory paper: Say whether the core distinction is genuinely new or a relabelling of existing concepts. Name one empirical result the theory predicts that competing accounts cannot. State what would have to be true for the theory to be wrong.
-
-Review paper: Name the live disagreement the field is not acknowledging. State the synthesis the reviewed papers resist. Identify what a follow-up meta-analysis would need to settle the dispute.
-
-Position paper: Identify the weakest premise in the argument. State what the position implies that its authors have not followed through on. Name the strongest empirical finding that bears on the central claim.
-
-In all cases: one outside reference doing real explanatory work — an adjacent finding, a framework from another field, a thinker whose position this evidence bears on. If removing it would not damage the explanation, cut it.
-
-Claim ladder — distinguish these precisely:
-- "The paper shows X" — directly supported by the data
-- "The paper implies Y" — strong inference
-- "The tempting but unproven claim is Z" — hypothesis
-- "The paper cannot tell us W" — boundary
-
-State positions directly when the evidence warrants it. When the paper's interpretation outruns its data, name the exact leap. Do not inflate the paper's importance — the goal is to locate the exact place where it changes the listener's model, not to make every paper sound world-historical.
-
-Precision rules:
-- Avoid near-universals. "The dominant X" is almost always more accurate than "virtually all X" or "most X."
-- Avoid specific quantities not stated in the paper. If you are inferring a scale or magnitude, describe the components of the process instead of naming a number.
-- When a finding inverts the expected relationship, name who is in the unexpected position and describe their specific condition. Do not describe the structure of the asymmetry — describe the party caught in it.
-
-Style rules:
-- 700–1000 words. Plain spoken English. No bullet points, headers, or markdown.
-- No "let me explain", "what this means is", "in other words", "to put it simply", "you might be wondering", "as shown in Figure 3."
-- Do not announce that something is interesting, damning, strange, or uncomfortable. Make the sentence itself prove it.
-- No direct quotation unless the paper coins a term the listener needs. Translate technical claims into precise spoken prose.
-- Vary sentence length: short for pressure, longer for causal reasoning.
-- Paragraphs are listenable units — usually 3 to 6 sentences, each paragraph with one job: finding, setup, contrast, mechanism, implication, objection, or unresolved tension.
-- End with a precise question, not a statement about what we don't know. The question should restate the episode's central tension in fresh language — a callback, not a summary.
-
-Before returning the script, run a silent revision pass covering four checks:
-
-1. Technical calibration. Find any claim that is technically exact: "bit-for-bit," "cannot," "never," "always," "fully solves," "zero," "identical," specific numbers not in the paper. If the claim depends on implementation detail, benchmark setting, hardware generation, or contested definition, replace it with precise but defensible language. Do not weaken the argument — sharpen its accuracy. "Mathematically equivalent up to floating-point operation order" is stronger than "bit-for-bit identical" because it is actually true.
-
-2. Reference necessity. Delete any outside reference that could be removed without damaging the explanation. Ask: does this reference change what the listener understands about the mechanism? If not, cut it. One reference doing real work is better than two that signal erudition.
-
-3. Paragraph density. If a paragraph contains more than three distinct mechanisms, findings, or claims, either split it into two paragraphs or cut the weakest item. Dense paragraphs read well; they do not listen well.
-
-4. Ending freshness. Do not force a binary framing (account A vs account B) unless the paper genuinely creates exactly two competing interpretations with different predictions. A binary ending is a structure, not a default. If the paper leaves one precise question unresolved, end on that question alone.
-
-Do not include stage directions, sound effects, or music cues. Just the spoken script."""
-
-SUMMARY_PROMPT = """You are writing a permanent note for a researcher's Zettelkasten. This is not an abstract or a summary — it is an atomic, opinionated, linkable record of what this paper does, why it matters, and what it leaves unresolved.
-
-Write a Markdown note (300–400 words) with these five sections:
-
-## Claim
-One sentence. State the core finding or thesis as a direct claim about the world, not about the paper. "X causes Y under condition Z" not "This paper shows that X may cause Y."
-
-## Mechanism
-Two to four sentences. What is the causal or logical chain that produces the claim? Be specific about what drives what. If the paper is empirical, name the key design choice that makes the result believable (or not).
-
-## Context
-Name what this extends, displaces, or contradicts. Cite specific prior findings or named frameworks — not vague gestures at "the literature." If this paper is in tension with something you know the researcher is likely to have encountered, say so directly.
-
-## Limits
-State the single most important thing this paper cannot establish. Name the confound it cannot rule out, the population it cannot generalise to, or the assumption that, if wrong, undoes the result. Be specific — "small sample" is not a limit; "N=48 undergraduates at one US university, no replication" is.
-
-## Connections
-Two to three short bullets. Each bullet names a concept, finding, or question this paper connects to — material for future links in the Zettelkasten. Write them as phrases the researcher can use as search terms or note titles, not full sentences. These should be intellectually live connections, not obvious category memberships.
-
-Rules:
-- Lead every section with the substance, not a meta-statement about the section
-- No throat-clearing: "this paper explores", "the authors argue that", "this study investigates"
-- Take positions. "The limit here is X" not "future research could explore X."
-- Plain Markdown with the headers above. No citations, no equations."""
-
-VOICE_PASS_PROMPT = """You are editing a podcast script for spoken audio delivery. Your job is purely editorial — preserve every substantive claim, fact, argument, and example exactly as written. Do not add ideas, remove ideas, or change the meaning of any sentence.
-
-Make only these changes:
-- Break sentences that are too long to follow on first hearing into two or three shorter ones
-- Remove essay-register phrasing ("That reframing has a consequence", "It is worth noting that", "This is more specific than")
-- Replace abstract transitions with concrete contrasts or direct continuation
-- Ensure any sentence that introduces a new concept gives the listener a beat before the next one arrives
-- Prefer active constructions over passive where it doesn't change the meaning
-- When a comparison group appears, flag it before naming it. Then state each side of the comparison in its own short sentence.
-- When a borrowed theoretical framework is named, translate its terms into what physically happens. Use the phenomenon, not the formalism — "both sounds get pulled into the same category" not "within the attractor basin of a single native prototype."
-- Split any paragraph that contains more than three distinct mechanisms or claims. If all three are essential, split; if one is weaker, cut it.
-
-Return the full edited script only. Begin the script directly — no preamble, no "Here is the edited script:", no commentary."""
-
-
-SHOW_NOTES_PROMPT = """Write podcast show notes for an episode about an academic paper. The listener is browsing their podcast app deciding whether to press play.
-
-Write 3–4 sentences of plain prose. No markdown, no headers, no bullet points.
-
-Sentence 1: The core finding or argument — stated as a direct claim about the world, not a description of the paper.
-Sentence 2: Why it matters or what it changes — the implication for how we think about the topic.
-Sentences 3–4: What makes this paper interesting or surprising — the hook that earns a listen.
-
-Rules:
-- No throat-clearing: "In this episode", "This paper", "Today we discuss"
-- Write as if describing a conversation, not summarising a document
-- Plain text only — this will be displayed in a podcast app"""
-
-
-METADATA_PROMPT = """Extract metadata from this academic paper and return ONLY a JSON object with two keys:
-1. "authors": a list of author name strings (first + last name, e.g. ["Jane Smith", "John Doe"]). Empty list if not found.
-2. "topics": a list of 3–5 short topic/theme tags (lowercase, 1–3 words each, e.g. ["urban sociology", "class conflict", "state theory"]).
-
-Return only valid JSON, no markdown fences, no commentary."""
-
-
 ARXIV_ID = re.compile(r"(?:[0-9]{4}\.[0-9]{4,5}|[a-zA-Z][a-zA-Z0-9.-]*/[0-9]{7})(?:v[1-9][0-9]*)?")
 ARXIV_HOSTS = {"arxiv.org", "www.arxiv.org", "export.arxiv.org"}
 
@@ -533,7 +395,80 @@ def sample_source(text, word_limit, char_limit):
     return sample_characters(sampled, char_limit)
 
 
-def complete_message(model, prompt, max_tokens, usage, *, source=None, warnings=None, source_word_limit=None):
+def operation_attempts():
+    operation = configuration._operation.get()
+    return [dict(record) for record in operation.attempts] if operation else []
+
+
+def prompt_snapshot():
+    return configuration.prompt_snapshot()
+
+
+def script_prompt_snapshot():
+    templates = prompt_snapshot()
+    for name in ('script', 'voice_edit'):
+        if templates[name].error:
+            raise PromptError(templates[name].error)
+    return templates
+
+
+def complete_message(model, prompt, max_tokens, usage, *, source=None, warnings=None,
+                     source_word_limit=None, template=None, inputs=None, validator=None):
+    record = None
+    if template is not None:
+        operation = configuration._operation.get()
+        record = {'step': template.name, 'template_hash': template.sha256,
+                  'model': model, 'max_tokens': max_tokens,
+                  'sampling_version': SAMPLING_VERSIONS[template.name],
+                  'source': dict(operation.source) if operation else {},
+                  'source_word_limit': source_word_limit,
+                  'inputs': {name: AttemptJournal(configuration.locations.data).archive_input(value)
+                             for name, value in (inputs or {}).items()},
+                  'parameters': {name: value for name, value in (inputs or {}).items()
+                                 if name == 'length_rule'},
+                  'temperature': 'provider-default',
+                  'status': 'started',
+                  'started_at': datetime.datetime.now(datetime.timezone.utc).isoformat()}
+        AttemptJournal(configuration.locations.data).write(record)
+        if operation:
+            operation.attempts.append(record)
+        if template.warning and warnings is not None and template.warning not in warnings:
+            warnings.append(template.warning)
+    try:
+        result = _complete_message(model, prompt, max_tokens, usage, source=source,
+                                   warnings=warnings, source_word_limit=source_word_limit,
+                                   record=record)
+        if validator is not None:
+            validator(result)
+    except Exception:
+        if record is not None:
+            # Safe status only: never persist provider diagnostics or credentials.
+            record.update(status='failed', finished_at=datetime.datetime.now(datetime.timezone.utc).isoformat())
+            finish_attempt(record, warnings)
+        raise
+    if record is not None:
+        record.update(status='succeeded', output=input_reference(result),
+                      finished_at=datetime.datetime.now(datetime.timezone.utc).isoformat())
+        finish_attempt(record, warnings)
+    return result
+
+
+HISTORY_UPDATE_WARNING = 'Generation history update failed; response and attempt details retained in the episode.'
+
+
+def finish_attempt(record, warnings):
+    try:
+        AttemptJournal(configuration.locations.data).write(record)
+    except OSError:
+        # A post-call audit failure must not discard an already paid response.
+        record['journal_update_failed'] = True
+        log_failure('Generation history update failed; response retained')
+        if warnings is not None and HISTORY_UPDATE_WARNING not in warnings:
+            warnings.append(HISTORY_UPDATE_WARNING)
+
+
+def _complete_message(model, prompt, max_tokens, usage, *, source=None, warnings=None,
+                      source_word_limit=None, record=None):
     prefix = prompt
     original_source = source
     if source is not None:
@@ -566,11 +501,19 @@ def complete_message(model, prompt, max_tokens, usage, *, source=None, warnings=
             warnings.append('Source sampled to fit the source-cost and model budgets; review against the full paper.')
         if count.input_tokens + max_tokens > input_limit:
             raise UserError("Prompt exceeds the 60,000 input-token budget. Upload a shorter source.")
+        if record is not None:
+            record.update(request=input_reference(prompt), system_hash=hashlib.sha256(system.encode('utf-8')).hexdigest(),
+                          sampled_source=AttemptJournal(configuration.locations.data).archive_input(source) if source is not None else None,
+                          input_token_limit=input_limit, prompt_character_limit=MAX_PROMPT_CHARS,
+                          input_tokens=count.input_tokens)
+            AttemptJournal(configuration.locations.data).write(record)
         response = client.messages.create(model=model, max_tokens=max_tokens,
             system=system,
             messages=[{"role": "user", "content": prompt}])
     usage.append({"model": model, "input_tokens": response.usage.input_tokens,
                   "output_tokens": response.usage.output_tokens})
+    if record is not None:
+        record['usage'] = dict(usage[-1])
     if response.stop_reason != "end_turn":
         raise UserError("Claude did not finish the response. Draft was not sent to speech; try a shorter target.")
     text = "\n".join(b.text for b in response.content if b.type == "text").strip()
@@ -587,13 +530,16 @@ def generate_podcast_script(paper_text, notes="", target_words=None, model=None,
         length_rule = "500–2500 words, as the substance warrants; never pad to fill time"
     else:
         length_rule = f"{max(150, round(target_words*.85))}–{round(target_words*1.15)} words"
-    prompt = PODCAST_PROMPT.replace("700–1000 words", length_rule)
-    prefix = f"{prompt}\n\nUser notes: {notes}\n\nPaper source:\n"
+    templates = script_prompt_snapshot()
+    inputs = dict(length_rule=length_rule, notes=notes, source=text)
+    prefix = templates['script'].prefix(length_rule=length_rule, notes=notes)
     draft = complete_message(model, prefix, int(budget_words*1.8)+1500, usage,
-                             source=text, warnings=warnings, source_word_limit=max(12000, budget_words*6))
+                             source=text, warnings=warnings, source_word_limit=max(12000, budget_words*6),
+                             template=templates['script'], inputs=inputs)
     try:
-        return complete_message(fast, f"{VOICE_PASS_PROMPT}\n\nScript to edit:\n{draft}",
-                                int(budget_words*1.8)+1000, usage)
+        return complete_message(fast, templates['voice_edit'].render(script=draft),
+                                int(budget_words*1.8)+1000, usage, warnings=warnings,
+                                template=templates['voice_edit'], inputs=dict(script=draft))
     except Exception:
         if warnings is None:
             raise
@@ -602,21 +548,34 @@ def generate_podcast_script(paper_text, notes="", target_words=None, model=None,
         return draft
 
 
-def extract_metadata(paper_text, model, usage):
-    raw = complete_message(model, METADATA_PROMPT+"\n\nPaper text:\n"+" ".join(paper_text.split()[:3000]), 600, usage)
+def parse_metadata(raw):
     raw = re.sub(r'^```(?:json)?\s*|\s*```$', '', raw.strip(), flags=re.IGNORECASE)
     data = json.loads(raw)
-    if not isinstance(data, dict) or any(not isinstance(data.get(k), list) for k in ("authors", "topics")):
+    if not isinstance(data, dict) or any(not isinstance(data.get(k), list) for k in ('authors', 'topics')):
         raise ValueError("Invalid metadata schema")
     return {k: [v[:200] for v in data[k][:30] if isinstance(v, str)] for k in ("authors", "topics")}
 
 
+def extract_metadata(paper_text, model, usage):
+    template = prompt_snapshot()['metadata']
+    inputs = dict(source=" ".join(paper_text.split()[:3000]))
+    raw = complete_message(model, template.render(**inputs), 600, usage,
+                           template=template, inputs=inputs, validator=parse_metadata)
+    return parse_metadata(raw)
+
+
 def generate_summary(paper_text, title, model, usage):
-    return complete_message(model, f"{SUMMARY_PROMPT}\n\nPaper title: {title}\n\nPaper source:\n{smart_truncate(paper_text,8000)}", 1400, usage)
+    template = prompt_snapshot()['summary']
+    inputs = dict(title=title, source=smart_truncate(paper_text, 8000))
+    return complete_message(model, template.render(**inputs), 1400, usage,
+                            template=template, inputs=inputs)
 
 
 def generate_show_notes(paper_text, title, authors, model, usage):
-    return complete_message(model, f"{SHOW_NOTES_PROMPT}\n\nPaper: {title} by {', '.join(authors)}\n\nPaper source:\n{smart_truncate(paper_text,6000)}", 600, usage)
+    template = prompt_snapshot()['show_notes']
+    inputs = dict(title=title, authors=', '.join(authors), source=smart_truncate(paper_text, 6000))
+    return complete_message(model, template.render(**inputs), 600, usage,
+                            template=template, inputs=inputs)
 
 
 def get_voice_id(client: ElevenLabs) -> str:
@@ -951,6 +910,7 @@ def json_body():
 
 
 def _prepare_episode(req):
+    templates = script_prompt_snapshot()  # Preflight before input/provider network access.
     require_keys('ANTHROPIC_API_KEY')
     # Check the store before incurring any provider charges.
     load_episodes()
@@ -978,7 +938,12 @@ def _prepare_episode(req):
     else:
         raise UserError('Provide a PDF file or an arXiv ID.')
     paper_text = extract_text_from_pdf(pdf_bytes)
-    warnings, usage = [], []
+    operation = configuration._operation.get()
+    if operation is not None:
+        operation.source = AttemptJournal(configuration.locations.data).archive_input(paper_text)
+    warnings = [message for template in templates.values()
+                for message in (template.warning, template.error) if message]
+    usage = []
     if arxiv_id and not title:
         try:
             title = fetch_arxiv_meta(arxiv_id).get('title','')
@@ -988,7 +953,7 @@ def _prepare_episode(req):
     writing, fast = resolve_models(req.form)
     try:
         script = generate_podcast_script(paper_text, notes, target, writing, fast, usage, warnings)
-    except UserError:
+    except (UserError, PromptError):
         raise
     except Exception as exc:
         log_failure('Script generation failed')
@@ -1001,7 +966,9 @@ def _prepare_episode(req):
         'character_count': len(script), 'date': datetime.datetime.now(datetime.timezone.utc).isoformat(),
         'audio_url': '', 'audio_ready': False, 'r2_url': None, 'file_size': 0, 'duration': 0,
         'text_model': writing, 'fast_model': fast, 'usage': usage, 'warnings': warnings,
-        'review_required': any(w.startswith('Voice editing failed') for w in warnings)}
+        'review_required': any(w.startswith('Voice editing failed') for w in warnings),
+        'generation_attempts': operation_attempts(),
+        'source_hash': hashlib.sha256(paper_text.encode('utf-8')).hexdigest()}
     pdf_path = PDF_DIR/(slug+'.pdf')
     storage.atomic_write(pdf_path, pdf_bytes)
     try:
@@ -1022,7 +989,10 @@ def _prepare_episode(req):
         except Exception:
             log_failure('%s generation failed', name)
             warnings.append(f'{name.capitalize()} failed; script is saved and can still be voiced.')
-    ep.update(warnings=warnings, usage=usage)
+    if (any(record.get('journal_update_failed') for record in operation_attempts())
+            and HISTORY_UPDATE_WARNING not in warnings):
+        warnings.append(HISTORY_UPDATE_WARNING)
+    ep.update(warnings=warnings, usage=usage, generation_attempts=operation_attempts())
     return storage.update(EPISODES_FILE, slug, ep)
 
 
@@ -1035,6 +1005,7 @@ def generate_script_only():
 @app.route('/generate', methods=['POST'])
 @exclusive_mutation
 def generate():
+    script_prompt_snapshot()
     require_keys('ELEVENLABS_API_KEY')
     try:
         get_voice_id(ElevenLabs(api_key=credential('ELEVENLABS_API_KEY'),
