@@ -14,9 +14,10 @@ Single-user loopback-only Flask app. Read README.md for installation, data flow,
 
 ## Code map
 
-- `app.py`: Flask routes, request protection, provider calls, generation and R2/feed workflows.
+- `app.py`: Flask routes, request protection, provider orchestration, generation and R2/feed workflows.
 - `configuration.py`, `credential_store.py`, `library_locations.py`: settings precedence, endpoint-bound secrets and explicit copy/verify/switch library moves. Never log credential values or provider exception bodies.
 - `prompts.py`, `prompt_templates/`: literal prompt snapshots, validation, immutable hash history and text-generation attempt journals. Browser editing is deferred.
+- `providers/`: existing Anthropic text and ElevenLabs speech adapters; no automatic network calls.
 - `storage.py`: locked JSON persistence, backups and legacy-ID migration.
 - `pdf_text.py`: bounded PDF extraction worker, launched in a timed subprocess.
 - `templates/`, `static/ui.js`: upload/draft and library views; shared CSRF fetch helper.
